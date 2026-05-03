@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Pi/session/runtime state
+.pi/agent/sessions/
+.pi/agent/subagents/
+*.jsonl
+
+# Logs and temporary files
+*.log
+.cache/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

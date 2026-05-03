@@ -1,0 +1,40 @@
+{
+  "name": "pi-context-breadcrumbs",
+  "version": "0.1.0",
+  "description": "Nested path-sensitive context loading for Pi coding agent.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "context",
+    "agents"
+  ],
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "config.schema.json",
+    "docs"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "node --experimental-transform-types test/context-breadcrumbs.test.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.70.6",
+    "@types/node": "^25.0.0",
+    "typescript": "^5.0.0"
+  }
+}
