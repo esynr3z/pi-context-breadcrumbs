@@ -5,20 +5,16 @@
   "additionalProperties": false,
   "properties": {
     "enabled": { "type": "boolean", "default": true },
-    "loadMode": { "enum": ["chain", "nearest"], "default": "chain" },
-    "maxFileBytes": { "type": "number", "minimum": 1, "default": 65536 },
     "includeFilenames": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "default": ["AGENTS.md"]
+      "default": ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"]
     },
     "ignoreDirs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "default": [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"]
     },
-    "notifyOnLoad": { "type": "boolean", "default": true },
-    "maxLoadedFiles": { "type": "number", "minimum": 1, "default": 64 },
-    "maxTotalBytes": { "type": "number", "minimum": 1, "default": 1048576 }
+    "notifyOnLoad": { "type": "boolean", "default": true }
   }
 }

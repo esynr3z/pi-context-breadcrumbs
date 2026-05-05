@@ -1,30 +1,22 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-export type LoadMode = "chain" | "nearest";
 export type NotifyLevel = "info" | "warning" | "error";
 
 export interface NestedContextConfig {
 	enabled: boolean;
-	loadMode: LoadMode;
-	maxFileBytes: number;
 	includeFilenames: string[];
 	ignoreDirs: string[];
 	notifyOnLoad: boolean;
-	maxLoadedFiles: number;
-	maxTotalBytes: number;
 }
 
 export const DEFAULT_CONFIG: NestedContextConfig = {
 	enabled: true,
-	loadMode: "chain",
-	maxFileBytes: 65_536,
-	includeFilenames: ["AGENTS.md"],
+	includeFilenames: ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"],
 	ignoreDirs: [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"],
 	notifyOnLoad: true,
-	maxLoadedFiles: 64,
-	maxTotalBytes: 1_048_576,
 };
 
 export const CONFIG_SCHEMA = {
@@ -32,8 +24,6 @@ export const CONFIG_SCHEMA = {
 	additionalProperties: false,
 	properties: {
 		enabled: { type: "boolean", default: DEFAULT_CONFIG.enabled },
-		loadMode: { enum: ["chain", "nearest"], default: DEFAULT_CONFIG.loadMode },
-		maxFileBytes: { type: "number", minimum: 1, default: DEFAULT_CONFIG.maxFileBytes },
 		includeFilenames: {
 			type: "array",
 			items: { type: "string", minLength: 1 },
@@ -45,8 +35,6 @@ export const CONFIG_SCHEMA = {
 			default: DEFAULT_CONFIG.ignoreDirs,
 		},
 		notifyOnLoad: { type: "boolean", default: DEFAULT_CONFIG.notifyOnLoad },
-		maxLoadedFiles: { type: "number", minimum: 1, default: DEFAULT_CONFIG.maxLoadedFiles },
-		maxTotalBytes: { type: "number", minimum: 1, default: DEFAULT_CONFIG.maxTotalBytes },
 	},
 } as const;
 
@@ -92,25 +80,12 @@ function uniqueStrings(values: unknown, fallback: string[]): string[] {
 
 export function normalizeConfig(raw: unknown): NestedContextConfig {
 	const input = isPlainObject(raw) ? raw : {};
-	const loadMode = input.loadMode === "nearest" || input.loadMode === "chain" ? input.loadMode : DEFAULT_CONFIG.loadMode;
-	const maxFileBytes = positiveInteger(input.maxFileBytes, DEFAULT_CONFIG.maxFileBytes);
-	const maxLoadedFiles = positiveInteger(input.maxLoadedFiles, DEFAULT_CONFIG.maxLoadedFiles);
-	const maxTotalBytes = positiveInteger(input.maxTotalBytes, DEFAULT_CONFIG.maxTotalBytes);
-
 	return {
 		enabled: typeof input.enabled === "boolean" ? input.enabled : DEFAULT_CONFIG.enabled,
-		loadMode,
-		maxFileBytes,
 		includeFilenames: uniqueStrings(input.includeFilenames, DEFAULT_CONFIG.includeFilenames),
 		ignoreDirs: uniqueStrings(input.ignoreDirs, DEFAULT_CONFIG.ignoreDirs),
 		notifyOnLoad: typeof input.notifyOnLoad === "boolean" ? input.notifyOnLoad : DEFAULT_CONFIG.notifyOnLoad,
-		maxLoadedFiles,
-		maxTotalBytes,
 	};
-}
-
-function positiveInteger(value: unknown, fallback: number): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function loadJsonIfPresent(filePath: string): unknown | undefined {
@@ -219,6 +194,30 @@ function hasIgnoredSegment(relativePath: string, ignoreDirs: Set<string>): boole
 	return relativePath.split(path.sep).some((segment) => ignoreDirs.has(segment));
 }
 
+function findGitRoot(cwd: string): string | undefined {
+	const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+		cwd,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+		shell: process.platform === "win32",
+	});
+	if (result.status !== 0) return undefined;
+	const stdout = result.stdout.trim();
+	return stdout ? path.normalize(path.resolve(cwd, stdout)) : undefined;
+}
+
+function isGitIgnored(gitRoot: string, absPath: string): boolean {
+	if (!isUnderPath(absPath, gitRoot)) return false;
+	const relPath = path.relative(gitRoot, absPath).replace(/\\/g, "/");
+	if (!relPath || relPath === ".") return false;
+	const result = spawnSync("git", ["check-ignore", "--quiet", "--", relPath], {
+		cwd: gitRoot,
+		stdio: "ignore",
+		shell: process.platform === "win32",
+	});
+	return result.status === 0;
+}
+
 function safeRealpathSync(filePath: string): string | undefined {
 	try {
 		return realpathSync.native(filePath);
@@ -255,6 +254,7 @@ export class NestedContextManager {
 	readonly cwdAbs: string;
 	readonly cwdReal: string;
 	config: NestedContextConfig;
+	private readonly gitRootAbs: string | undefined;
 	private readonly notify?: NotifyFn;
 	private readonly ignoreDirSet: Set<string>;
 	private readonly loaded = new Map<string, LoadedContextFile>();
@@ -266,6 +266,7 @@ export class NestedContextManager {
 		this.cwdAbs = path.resolve(cwd);
 		this.cwdReal = safeRealpathSync(this.cwdAbs) ?? this.cwdAbs;
 		this.config = normalizeConfig(config);
+		this.gitRootAbs = findGitRoot(this.cwdAbs);
 		this.notify = notify;
 		this.ignoreDirSet = new Set(this.config.ignoreDirs);
 	}
@@ -292,6 +293,11 @@ export class NestedContextManager {
 
 	loadedCount(): number {
 		return this.loaded.size;
+	}
+
+	private isIgnoredPath(absPath: string): boolean {
+		const relFromCwd = path.relative(this.cwdAbs, absPath);
+		return hasIgnoredSegment(relFromCwd, this.ignoreDirSet) || (this.gitRootAbs ? isGitIgnored(this.gitRootAbs, absPath) : false);
 	}
 
 	listLoaded(): NestedContextListEntry[] {
@@ -381,8 +387,7 @@ export class NestedContextManager {
 		const dir = targetExists && targetIsDirectory ? resolved : path.dirname(resolved);
 		if (!isUnderPath(dir, this.cwdAbs)) return undefined;
 
-		const relDir = path.relative(this.cwdAbs, dir);
-		if (hasIgnoredSegment(relDir, this.ignoreDirSet)) return undefined;
+		if (this.isIgnoredPath(dir)) return undefined;
 
 		const existingAncestor = nearestExistingAncestor(dir, this.cwdAbs);
 		if (!existingAncestor) return undefined;
@@ -406,52 +411,13 @@ export class NestedContextManager {
 	}
 
 	private discoverForDirectory(targetDir: string, options: { notifyFirstLoad: boolean } = { notifyFirstLoad: true }): void {
-		const dirs = this.dirsBroadToSpecific(targetDir).filter((dir) => {
-			const rel = path.relative(this.cwdAbs, dir);
-			return !hasIgnoredSegment(rel, this.ignoreDirSet);
-		});
-
-		if (this.config.loadMode === "nearest") {
-			for (const dir of [...dirs].reverse()) {
-				let loadedAny = false;
-				for (let index = 0; index < this.config.includeFilenames.length; index++) {
-					const candidate = path.normalize(path.join(dir, this.config.includeFilenames[index]!));
-					loadedAny = this.loadCandidate(candidate, index, { notifyFirstLoad: options.notifyFirstLoad }) || loadedAny;
-				}
-				if (loadedAny) return;
-			}
-			return;
-		}
+		const dirs = this.dirsBroadToSpecific(targetDir).filter((dir) => !this.isIgnoredPath(dir));
 
 		for (const dir of dirs) {
 			for (let index = 0; index < this.config.includeFilenames.length; index++) {
 				this.loadCandidate(path.normalize(path.join(dir, this.config.includeFilenames[index]!)), index, {
 					notifyFirstLoad: options.notifyFirstLoad,
 				});
-			}
-		}
-	}
-
-	private enforceAggregateLimits(): void {
-		let keptFiles = 0;
-		let keptBytes = 0;
-		for (const entry of this.orderedLoaded()) {
-			const withinFileLimit = keptFiles < this.config.maxLoadedFiles;
-			const withinByteLimit = keptBytes + entry.size <= this.config.maxTotalBytes;
-			if (withinFileLimit && withinByteLimit) {
-				keptFiles++;
-				keptBytes += entry.size;
-				continue;
-			}
-
-			this.loaded.delete(entry.absPath);
-			const warningKey = `${entry.absPath}:aggregate-limit:${this.config.maxLoadedFiles}:${this.config.maxTotalBytes}`;
-			if (!this.warned.has(warningKey)) {
-				this.warned.add(warningKey);
-				this.notify?.(
-					`Skipped nested context file due to aggregate limits: ${entry.relPath} (maxLoadedFiles=${this.config.maxLoadedFiles}, maxTotalBytes=${this.config.maxTotalBytes})`,
-					"warning",
-				);
 			}
 		}
 	}
@@ -465,6 +431,7 @@ export class NestedContextManager {
 
 		try {
 			if (!isUnderPath(normalizedAbs, this.cwdAbs)) return invalidate();
+			if (this.isIgnoredPath(normalizedAbs)) return invalidate();
 			if (this.startupContextPaths.has(normalizedAbs)) return invalidate();
 
 			let lst;
@@ -480,23 +447,9 @@ export class NestedContextManager {
 			const st = lst.isSymbolicLink() ? statSync(normalizedAbs) : statSync(normalizedAbs);
 			if (!st.isFile()) return invalidate();
 
-			if (st.size > this.config.maxFileBytes) {
-				invalidate();
-				const warningKey = `${normalizedAbs}:oversize:${st.mtimeMs}:${st.size}`;
-				if (!this.warned.has(warningKey)) {
-					this.warned.add(warningKey);
-					this.notify?.(
-						`Skipped nested context file over ${this.config.maxFileBytes} bytes: ${path.relative(this.cwdAbs, normalizedAbs).replace(/\\/g, "/")}`,
-						"warning",
-					);
-				}
-				return false;
-			}
-
 			const existing = this.loaded.get(normalizedAbs);
 			if (existing && existing.mtimeMs === st.mtimeMs && existing.size === st.size) {
-				this.enforceAggregateLimits();
-				return this.loaded.has(normalizedAbs);
+				return true;
 			}
 
 			const content = readFileSync(normalizedAbs, "utf8");
@@ -515,13 +468,10 @@ export class NestedContextManager {
 				lastLoadTime: Date.now(),
 				includeIndex,
 			});
-			this.enforceAggregateLimits();
-
-			const retained = this.loaded.has(normalizedAbs);
-			if (retained && !existing && options.notifyFirstLoad && this.config.notifyOnLoad) {
+			if (!existing && options.notifyFirstLoad && this.config.notifyOnLoad) {
 				this.notify?.(`Loaded nested context file: ${relPath}`, "info");
 			}
-			return retained;
+			return true;
 		} catch (error) {
 			invalidate();
 			const warningKey = `${absPath}:error:${String(error)}`;
@@ -559,7 +509,7 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 	let manager: NestedContextManager | undefined;
 	let builtinToolNames = new Set<string>();
 
-	const safeNotify = (ctx: { hasUI?: boolean; ui?: { notify?: (message: string, level: NotifyLevel) => void; setStatus?: (key: string, value: string | undefined) => void } }, message: string, level: NotifyLevel) => {
+	const safeNotify = (ctx: { hasUI?: boolean; ui?: { notify?: (message: string, level: NotifyLevel) => void } }, message: string, level: NotifyLevel) => {
 		try {
 			ctx.ui?.notify?.(message, level);
 		} catch {
@@ -569,21 +519,8 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		const config = loadConfig(ctx.cwd, (message, level) => safeNotify(ctx, message, level));
-		manager = new NestedContextManager(ctx.cwd, config, (message, level) => {
-			safeNotify(ctx, message, level);
-			try {
-				ctx.ui.setStatus("nested-context", manager && manager.loadedCount() > 0 ? `nested ctx: ${manager.loadedCount()}` : undefined);
-			} catch {
-				// Status updates are best-effort.
-			}
-		});
+		manager = new NestedContextManager(ctx.cwd, config, (message, level) => safeNotify(ctx, message, level));
 		builtinToolNames = getBuiltinToolNames(pi);
-		try {
-			ctx.ui.setStatus("nested-context", undefined);
-			ctx.ui.setWidget("nested-context-list", undefined);
-		} catch {
-			// UI cleanup is best-effort.
-		}
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -633,26 +570,7 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 		description: "List currently loaded nested context files",
 		handler: async (_args, ctx) => {
 			const lines = formatList(manager?.listLoaded() ?? []);
-			try {
-				ctx.ui.setWidget("nested-context-list", undefined);
-			} catch {
-				// UI cleanup is best-effort.
-			}
 			safeNotify(ctx, lines.join("\n"), "info");
-		},
-	});
-
-	pi.registerCommand("nested-context-clear", {
-		description: "Clear nested context files discovered by the extension",
-		handler: async (_args, ctx) => {
-			manager?.clear();
-			try {
-				ctx.ui.setWidget("nested-context-list", undefined);
-				ctx.ui.setStatus("nested-context", undefined);
-			} catch {
-				// UI cleanup is best-effort.
-			}
-			safeNotify(ctx, "Cleared nested context files.", "info");
 		},
 	});
 }

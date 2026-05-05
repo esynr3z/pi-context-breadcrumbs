@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +13,11 @@ function count(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
+function run(command, args, cwd) {
+  const result = spawnSync(command, args, { cwd, stdio: "inherit" });
+  assert.equal(result.status, 0, `${command} ${args.join(" ")} failed`);
+}
+
 const cwd = mkdtempSync(path.join(tmpdir(), "nested-context-"));
 try {
   mkdirSync(path.join(cwd, "packages", "a", "src"), { recursive: true });
@@ -21,12 +27,14 @@ try {
   writeFileSync(path.join(cwd, "AGENTS.md"), "ROOT SHOULD NOT LOAD");
   writeFileSync(path.join(cwd, "packages", "AGENTS.md"), "PACKAGES");
   writeFileSync(path.join(cwd, "packages", "a", "AGENTS.md"), "A");
+  writeFileSync(path.join(cwd, "packages", "a", "AGENTS.override.md"), "A OVERRIDE");
   writeFileSync(path.join(cwd, "packages", "a", "src", "AGENTS.md"), "A SRC v1");
+  writeFileSync(path.join(cwd, "packages", "a", "src", "CLAUDE.md"), "A SRC CLAUDE");
   writeFileSync(path.join(cwd, "packages", "b", "AGENTS.md"), "B");
   writeFileSync(path.join(cwd, "packages", "b", "src", "AGENTS.md"), "B SRC");
   writeFileSync(path.join(cwd, "packages", "a", "src", "file.ts"), "export {};\n");
   writeFileSync(path.join(cwd, "packages", "b", "src", "file.ts"), "export {};\n");
-  writeFileSync(path.join(cwd, "packages", "huge", "AGENTS.md"), "x".repeat(80));
+  writeFileSync(path.join(cwd, "packages", "huge", "AGENTS.md"), "x".repeat(100_000));
 
   const loadedNotifications = [];
   const manager = new NestedContextManager(cwd, normalizeConfig({}), (message, level) => {
@@ -34,6 +42,7 @@ try {
   });
   manager.setStartupContextFiles([{ path: path.join(cwd, "AGENTS.md") }]);
 
+  assert.deepEqual(normalizeConfig({}).includeFilenames, ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"]);
   assert.equal(manager.buildContextMessage(), undefined, "no nested files are loaded before path access");
 
   await manager.observePath("packages/a/src/file.ts");
@@ -41,7 +50,9 @@ try {
   assert.deepEqual(filesIn(message), [
     "packages/AGENTS.md",
     "packages/a/AGENTS.md",
+    "packages/a/AGENTS.override.md",
     "packages/a/src/AGENTS.md",
+    "packages/a/src/CLAUDE.md",
   ]);
   assert.equal(message.includes("ROOT SHOULD NOT LOAD"), false);
   assert.equal(count(message, "File: packages/a/src/AGENTS.md"), 1);
@@ -55,8 +66,10 @@ try {
   assert.deepEqual(filesIn(message), [
     "packages/AGENTS.md",
     "packages/a/AGENTS.md",
+    "packages/a/AGENTS.override.md",
     "packages/b/AGENTS.md",
     "packages/a/src/AGENTS.md",
+    "packages/a/src/CLAUDE.md",
     "packages/b/src/AGENTS.md",
   ]);
 
@@ -66,14 +79,9 @@ try {
   clearable.refreshLoaded();
   assert.equal(clearable.buildContextMessage(), undefined, "clear removes loaded files and observed directories");
 
-  const nearest = new NestedContextManager(cwd, normalizeConfig({ loadMode: "nearest" }));
-  nearest.setStartupContextFiles([{ path: path.join(cwd, "AGENTS.md") }]);
-  await nearest.observePath("packages/a/src/file.ts");
-  assert.deepEqual(filesIn(nearest.buildContextMessage()), ["packages/a/src/AGENTS.md"]);
-
-  const oversize = new NestedContextManager(cwd, normalizeConfig({ maxFileBytes: 64 }));
-  await oversize.observePath("packages/huge/src/file.ts");
-  assert.equal(oversize.buildContextMessage()?.includes("File: packages/huge/AGENTS.md"), false, "oversized context files are skipped");
+  const huge = new NestedContextManager(cwd, normalizeConfig({}));
+  await huge.observePath("packages/huge/src/file.ts");
+  assert.equal(huge.buildContextMessage()?.includes("File: packages/huge/AGENTS.md"), true, "large context files are loaded without size limits");
 
   const outside = new NestedContextManager(cwd, normalizeConfig({}));
   await outside.observePath("../outside/file.ts");
@@ -103,19 +111,29 @@ try {
   unlinkSync(path.join(cwd, "packages", "a", "src", "AGENTS.md"));
   writeFileSync(path.join(cwd, "packages", "a", "src", "AGENTS.md"), "A SRC v2 changed");
 
-  const limited = new NestedContextManager(cwd, normalizeConfig({ maxLoadedFiles: 2, maxTotalBytes: 1_000_000 }));
-  await limited.observePath("packages/a/src/file.ts");
-  assert.equal(filesIn(limited.buildContextMessage()).length, 2, "maxLoadedFiles limits aggregate injected context");
-
-  writeFileSync(path.join(cwd, "packages", "a", "src", "CLAUDE.md"), "CLAUDE SRC");
-  const customNames = new NestedContextManager(cwd, normalizeConfig({ includeFilenames: ["AGENTS.md", "CLAUDE.md"] }));
+  const customNames = new NestedContextManager(cwd, normalizeConfig({ includeFilenames: ["CLAUDE.md"] }));
   await customNames.observePath("packages/a/src/file.ts");
-  assert.deepEqual(filesIn(customNames.buildContextMessage()), [
-    "packages/AGENTS.md",
-    "packages/a/AGENTS.md",
-    "packages/a/src/AGENTS.md",
-    "packages/a/src/CLAUDE.md",
-  ]);
+  assert.deepEqual(filesIn(customNames.buildContextMessage()), ["packages/a/src/CLAUDE.md"]);
+
+  const gitCwd = mkdtempSync(path.join(tmpdir(), "nested-context-git-"));
+  try {
+    run("git", ["init", "-q"], gitCwd);
+    writeFileSync(path.join(gitCwd, ".gitignore"), "ignored/\n");
+    mkdirSync(path.join(gitCwd, "ignored", "src"), { recursive: true });
+    mkdirSync(path.join(gitCwd, "tracked", "src"), { recursive: true });
+    writeFileSync(path.join(gitCwd, "ignored", "AGENTS.md"), "IGNORED");
+    writeFileSync(path.join(gitCwd, "ignored", "src", "file.ts"), "export {};\n");
+    writeFileSync(path.join(gitCwd, "tracked", "AGENTS.md"), "TRACKED");
+    writeFileSync(path.join(gitCwd, "tracked", "src", "file.ts"), "export {};\n");
+
+    const gitIgnored = new NestedContextManager(gitCwd, normalizeConfig({}));
+    await gitIgnored.observePath("ignored/src/file.ts");
+    assert.equal(gitIgnored.buildContextMessage(), undefined, "gitignored directories are skipped");
+    await gitIgnored.observePath("tracked/src/file.ts");
+    assert.deepEqual(filesIn(gitIgnored.buildContextMessage()), ["tracked/AGENTS.md"]);
+  } finally {
+    rmSync(gitCwd, { recursive: true, force: true });
+  }
 
   assert.deepEqual(extractFilesystemPaths("bash", { command: "cat packages/a/src/file.ts" }), []);
   assert.deepEqual(extractFilesystemPaths("read", { path: "packages/a/src/file.ts" }), ["packages/a/src/file.ts"]);
