@@ -8,11 +8,12 @@ Path-scoped nested context loading for Pi coding agent. The extension watches fi
 pi install npm:pi-context-breadcrumbs
 ```
 
-Configuration is loaded at session start and after `/reload`.
+Configuration is loaded at session start and after `/reload`. The package also installs the `context-breadcrumbs` skill for maintaining breadcrumb files.
 
 ## Commands
 
 - `/context-breadcrumbs` — show loaded context files, their scope, size, and load time as a notification.
+- `/skill:context-breadcrumbs` — load the bundled breadcrumb maintenance policy when skill commands are enabled.
 
 State is in-memory only and is not persisted across Pi sessions.
 
