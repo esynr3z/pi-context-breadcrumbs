@@ -358,7 +358,7 @@ export class NestedContextManager {
 		const resolved = path.normalize(path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(this.cwdAbs, cleaned));
 		if (!isUnderPath(resolved, this.cwdAbs)) return undefined;
 
-		let targetExists = false;
+		let targetExists: boolean;
 		let targetIsDirectory = false;
 		try {
 			const lst = lstatSync(resolved);
@@ -581,7 +581,9 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 		try {
 			ctx.ui.setStatus("nested-context", undefined);
 			ctx.ui.setWidget("nested-context-list", undefined);
-		} catch {}
+		} catch {
+			// UI cleanup is best-effort.
+		}
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -633,7 +635,9 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 			const lines = formatList(manager?.listLoaded() ?? []);
 			try {
 				ctx.ui.setWidget("nested-context-list", undefined);
-			} catch {}
+			} catch {
+				// UI cleanup is best-effort.
+			}
 			safeNotify(ctx, lines.join("\n"), "info");
 		},
 	});
@@ -645,7 +649,9 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 			try {
 				ctx.ui.setWidget("nested-context-list", undefined);
 				ctx.ui.setStatus("nested-context", undefined);
-			} catch {}
+			} catch {
+				// UI cleanup is best-effort.
+			}
 			safeNotify(ctx, "Cleared nested context files.", "info");
 		},
 	});
