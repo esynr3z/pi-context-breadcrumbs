@@ -28,6 +28,6 @@ packages/b/AGENTS.md
 packages/b/src/AGENTS.md
 ```
 
-If you first accessed `packages/a/src/file.ts`, then access `packages/b/src/file.ts` in the same session, `/nested-context` lists all loaded files. The package-b access adds `packages/b/AGENTS.md` and `packages/b/src/AGENTS.md`; `packages/AGENTS.md` is not duplicated.
+If you first accessed `packages/a/src/file.ts`, then access `packages/b/src/file.ts` in the same session, `/context-breadcrumbs` lists all loaded files. The package-b access adds `packages/b/AGENTS.md` and `packages/b/src/AGENTS.md`; `packages/AGENTS.md` is not duplicated.
 
-Use `/nested-context` to list loaded files.
+Use `/context-breadcrumbs` to list loaded files.

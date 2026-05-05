@@ -566,8 +566,8 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.registerCommand("nested-context", {
-		description: "List currently loaded nested context files",
+	pi.registerCommand("context-breadcrumbs", {
+		description: "List currently loaded context breadcrumb files",
 		handler: async (_args, ctx) => {
 			const lines = formatList(manager?.listLoaded() ?? []);
 			safeNotify(ctx, lines.join("\n"), "info");

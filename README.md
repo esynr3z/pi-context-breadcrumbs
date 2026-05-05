@@ -104,7 +104,7 @@ Override `includeFilenames` if the project uses a different context filename set
 
 ## Commands
 
-- `/nested-context` — shows currently loaded nested context files, applies-to scope, byte size, and last load time as a notification. It does not leave a persistent widget below the editor.
+- `/context-breadcrumbs` — shows currently loaded nested context files, applies-to scope, byte size, and last load time as a notification. It does not leave a persistent widget below the editor.
 
 State is not persisted across Pi sessions.
 
@@ -149,7 +149,7 @@ cd demo-fixture
 pi -e ../src/index.ts
 ```
 
-Then ask Pi to read or edit `packages/a/src/file.ts`. After the tool call, `/nested-context` should list:
+Then ask Pi to read or edit `packages/a/src/file.ts`. After the tool call, `/context-breadcrumbs` should list:
 
 ```text
 packages/AGENTS.md
