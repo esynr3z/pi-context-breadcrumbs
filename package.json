@@ -16,8 +16,7 @@
     "dist",
     "src",
     "README.md",
-    "config.schema.json",
-    "docs"
+    "config.schema.json"
   ],
   "scripts": {
     "build": "tsc",

@@ -250,6 +250,12 @@ function fileSortKey(entry: LoadedContextFile): string {
 	return `${String(depth).padStart(6, "0")}\u0000${entry.dirRel}\u0000${String(entry.includeIndex).padStart(6, "0")}\u0000${entry.relPath}`;
 }
 
+// NestedContextManager is the source of truth for discovery behavior. It keeps
+// state in memory only: observed target directories, loaded context files, and
+// warnings already shown to the user. On each provider-context build,
+// refreshLoaded() re-stats loaded files and re-checks previously observed
+// directories, so edits or newly-created context files affect the next model
+// call without requiring another filesystem access.
 export class NestedContextManager {
 	readonly cwdAbs: string;
 	readonly cwdReal: string;
@@ -309,6 +315,9 @@ export class NestedContextManager {
 		}));
 	}
 
+	// Observe typed tool inputs before filesystem tools execute. Shell command
+	// strings are intentionally ignored by extractFilesystemPaths() because Pi's
+	// bash tool does not expose reliable typed path metadata.
 	async observeToolCall(toolName: string, input: unknown, isBuiltinTool = true): Promise<void> {
 		if (!this.config.enabled) return;
 		const paths = extractFilesystemPaths(toolName, input, isBuiltinTool);
@@ -361,6 +370,8 @@ export class NestedContextManager {
 		const cleaned = stripAtPrefix(rawPath);
 		if (!cleaned) return undefined;
 
+		// The Pi session cwd is the project boundary. Check both lexical paths and
+		// realpaths so symlinks cannot smuggle context discovery outside cwd.
 		const resolved = path.normalize(path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(this.cwdAbs, cleaned));
 		if (!isUnderPath(resolved, this.cwdAbs)) return undefined;
 
@@ -397,6 +408,9 @@ export class NestedContextManager {
 		return path.normalize(dir);
 	}
 
+	// Cwd-level files are excluded because Pi startup context already handles cwd
+	// and ancestors. Nested files are injected broad-to-specific so deeper files
+	// can override broader instructions for their scoped paths.
 	private dirsBroadToSpecific(targetDir: string): string[] {
 		const dirs: string[] = [];
 		let current = path.normalize(targetDir);
@@ -529,6 +543,8 @@ export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 		builtinToolNames = new Set();
 	});
 
+	// Capture Pi's startup context files before the first model call so this
+	// extension does not duplicate them in the injected breadcrumb message.
 	pi.on("before_agent_start", async (event) => {
 		manager?.setStartupContextFiles(event.systemPromptOptions.contextFiles);
 	});
@@ -543,6 +559,9 @@ export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 		}
 	});
 
+	// Discovery happens after tool calls, so provider context injection is used
+	// instead of mutating the startup system prompt. One hidden custom message is
+	// rebuilt for each provider call and deduplicated by customType.
 	pi.on("context", async (event) => {
 		try {
 			if (!manager?.config.enabled) return;
