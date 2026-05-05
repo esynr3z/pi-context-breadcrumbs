@@ -1,6 +1,6 @@
 {
   "name": "pi-context-breadcrumbs",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Nested path-sensitive context loading for Pi coding agent.",
   "type": "module",
   "keywords": [
