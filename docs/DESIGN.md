@@ -10,11 +10,11 @@
 
 The extension extracts clear typed path-like fields from non-shell tools. It supports current built-ins (`read`, `write`, `edit`, `ls`, `grep`, `find`) plus `list` / `search` aliases and future built-in typed tools with obvious path fields. It does not parse `bash.command` because Pi exposes no robust path metadata for shell strings.
 
-Paths are normalized relative to `ctx.cwd`. The cwd is the project boundary. The extension checks both lexical containment and realpath containment, skipping symlinks that escape cwd.
+Paths are normalized relative to `ctx.cwd`. The cwd is the project boundary. The extension checks both lexical containment and realpath containment, skipping symlinks that escape cwd. If `ctx.cwd` is inside a Git repository, Git's `check-ignore` result is used to skip paths matched by `.gitignore`.
 
 ## Discovery and precedence
 
-For each observed target directory, discovery walks from cwd's child toward the target directory. Cwd-level context files are excluded because Pi startup context already handles cwd and ancestors. In `chain` mode all configured filenames along the chain are loaded. In `nearest` mode only configured files in the nearest applicable directory are loaded.
+For each observed target directory, discovery walks from cwd's child toward the target directory. Cwd-level context files are excluded because Pi startup context already handles cwd and ancestors. All configured filenames along the chain are loaded in broad-to-specific order.
 
 Injected context states that:
 
@@ -26,11 +26,11 @@ Files are sorted deterministically by directory depth, relative directory, confi
 
 ## Caching and invalidation
 
-The extension stores discovered files in memory only. Each loaded file records size and `mtimeMs`. Before every LLM context build, loaded files are `stat`ed and re-read if size or `mtimeMs` changed; deleted or newly unsafe files are removed. Directories observed from prior tool calls are also rechecked before context injection, so a `write`/`edit` that creates a new context file can affect the next provider call without requiring another path access. Discovery checks exact candidate filenames rather than recursively walking or reading directories, avoiding expensive traversal and repeated reads. Aggregate `maxLoadedFiles` and `maxTotalBytes` limits cap long-session context growth deterministically.
+The extension stores discovered files in memory only. Each loaded file records size and `mtimeMs`. Before every LLM context build, loaded files are `stat`ed and re-read if size or `mtimeMs` changed; deleted or newly unsafe files are removed. Directories observed from prior tool calls are also rechecked before context injection, so a `write`/`edit` that creates a new context file can affect the next provider call without requiring another path access. Discovery checks exact candidate filenames rather than recursively walking or reading directories, avoiding expensive traversal and repeated reads.
 
 ## Safety limits
 
-Only names in `includeFilenames` are read. Files larger than `maxFileBytes` are skipped. Aggregate `maxLoadedFiles` and `maxTotalBytes` limits prevent unbounded accumulation across long sessions. Ignored directory names short-circuit discovery for paths under generated/vendor/cache directories. Context files are read as UTF-8 text and never executed.
+Only names in `includeFilenames` are read. Ignored directory names short-circuit discovery for paths under generated/vendor/cache directories. `.gitignore` rules are honored when cwd is inside a Git repository. Context files are read as UTF-8 text and never executed.
 
 ## Limitations
 

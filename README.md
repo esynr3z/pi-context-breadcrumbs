@@ -42,9 +42,8 @@ Discovery affects subsequent LLM calls. It does not retroactively affect the alr
 - Symlinks are checked with `realpath`; symlinks escaping cwd are skipped.
 - Only configured filenames are read.
 - Context files are never executed.
-- Oversized files are skipped with a concise warning.
-- Aggregate `maxLoadedFiles` and `maxTotalBytes` limits cap long-session context growth.
 - Common generated/vendor/cache dirs are ignored by default.
+- If the session cwd is inside a Git repository, paths ignored by `.gitignore` are skipped too.
 - Discovery errors are caught and do not block the original tool call.
 
 ## Discovery order and precedence
@@ -55,7 +54,7 @@ For a path like:
 packages/foo/src/driver.ts
 ```
 
-with default `loadMode: "chain"`, the extension searches upward from `packages/foo/src` toward cwd, excluding cwd itself, and injects matching files in broad-to-specific order:
+the extension searches upward from `packages/foo/src` toward cwd, excluding cwd itself, and injects matching files in broad-to-specific order:
 
 ```text
 packages/AGENTS.md
@@ -64,8 +63,6 @@ packages/foo/src/AGENTS.md
 ```
 
 Pi's startup context remains active. Nested context files are path-scoped; more specific nested files override broader/root instructions for matching paths when instructions conflict. This rule is stated explicitly in the injected context.
-
-With `loadMode: "nearest"`, only the nearest directory containing an applicable configured context file is loaded for each observed path.
 
 ## Injection
 
@@ -91,28 +88,23 @@ Schema/defaults:
 ```json
 {
   "enabled": true,
-  "loadMode": "chain",
-  "maxFileBytes": 65536,
-  "includeFilenames": ["AGENTS.md"],
+  "includeFilenames": ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"],
   "ignoreDirs": [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"],
-  "notifyOnLoad": true,
-  "maxLoadedFiles": 64,
-  "maxTotalBytes": 1048576
+  "notifyOnLoad": true
 }
 ```
 
-Add `CLAUDE.md` or other filenames explicitly if desired:
+Override `includeFilenames` if the project uses a different context filename set:
 
 ```json
 {
-  "includeFilenames": ["AGENTS.md", "CLAUDE.md"]
+  "includeFilenames": ["AGENTS.md", "PROJECT_NOTES.md"]
 }
 ```
 
 ## Commands
 
 - `/nested-context` — shows currently loaded nested context files, applies-to scope, byte size, and last load time as a notification. It does not leave a persistent widget below the editor.
-- `/nested-context-clear` — clears the extension's in-memory discovered context.
 
 State is not persisted across Pi sessions.
 
@@ -144,7 +136,7 @@ Run the lightweight automated tests with Node 25+:
 npm test
 ```
 
-The tests cover chain discovery, deduplication, separate subtrees, nearest mode, oversized skips, outside-cwd skips, changed-file reloads, newly-created context files after observed writes, unsafe replacement invalidation, aggregate limits, broad-to-specific order, custom filenames, and the bash parsing limitation.
+The tests cover chain discovery, deduplication, separate subtrees, default and custom filenames, `.gitignore` skips, outside-cwd skips, changed-file reloads, newly-created context files after observed writes, unsafe replacement invalidation, broad-to-specific order, large context files, and the bash parsing limitation.
 
 ## Demo fixture
 

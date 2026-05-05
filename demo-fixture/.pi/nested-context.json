@@ -1,10 +1,6 @@
 {
   "enabled": true,
-  "loadMode": "chain",
-  "maxFileBytes": 65536,
-  "includeFilenames": ["AGENTS.md"],
+  "includeFilenames": ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"],
   "ignoreDirs": [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"],
-  "notifyOnLoad": true,
-  "maxLoadedFiles": 64,
-  "maxTotalBytes": 1048576
+  "notifyOnLoad": true
 }
