@@ -22,7 +22,11 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test": "node --experimental-transform-types test/context-breadcrumbs.test.mjs"
+    "lint": "eslint .",
+    "test": "node --experimental-transform-types test/context-breadcrumbs.test.mjs",
+    "ci": "npm run lint && npm run check && npm test && npm run build",
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "release:check": "node scripts/verify-version-tag.mjs && npm run ci && npm pack --dry-run"
   },
   "pi": {
     "extensions": [
@@ -33,8 +37,12 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@mariozechner/pi-coding-agent": "^0.70.6",
     "@types/node": "^25.0.0",
-    "typescript": "^5.0.0"
+    "eslint": "^10.3.0",
+    "globals": "^17.6.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.59.2"
   }
 }
