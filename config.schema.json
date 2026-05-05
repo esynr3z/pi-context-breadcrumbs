@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Pi nested-context extension configuration",
+  "title": "Pi context-breadcrumbs extension configuration",
   "type": "object",
   "additionalProperties": false,
   "properties": {

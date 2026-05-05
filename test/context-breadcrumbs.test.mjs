@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { NestedContextManager, normalizeConfig, extractFilesystemPaths } from "../src/index.ts";
+import { NestedContextManager, normalizeConfig, extractFilesystemPaths, loadConfig } from "../src/index.ts";
 
 function filesIn(message) {
   return [...message.matchAll(/^File: (.+)$/gm)].map((m) => m[1]);
@@ -43,6 +43,13 @@ try {
   manager.setStartupContextFiles([{ path: path.join(cwd, "AGENTS.md") }]);
 
   assert.deepEqual(normalizeConfig({}).includeFilenames, ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"]);
+
+  mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+  writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ "context-breadcrumbs": { notifyOnLoad: false } }));
+  assert.equal(loadConfig(cwd).notifyOnLoad, false, "settings use the context-breadcrumbs key");
+  writeFileSync(path.join(cwd, ".pi", "context-breadcrumbs.json"), JSON.stringify({ notifyOnLoad: true }));
+  assert.equal(loadConfig(cwd).notifyOnLoad, true, "context-breadcrumbs.json overrides settings");
+
   assert.equal(manager.buildContextMessage(), undefined, "no nested files are loaded before path access");
 
   await manager.observePath("packages/a/src/file.ts");

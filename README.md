@@ -18,7 +18,7 @@ State is in-memory only and is not persisted across Pi sessions.
 
 ## Configuration
 
-Configuration is read from `.pi/settings.json` under `nestedContext`, then overridden by `.pi/nested-context.json` when present.
+Configuration is read from `.pi/settings.json` under `context-breadcrumbs`, then overridden by `.pi/context-breadcrumbs.json` when present.
 
 Defaults:
 

@@ -1,4 +1,4 @@
-# Design note: nested-context extension
+# Design note: context-breadcrumbs extension
 
 ## Hook choice
 

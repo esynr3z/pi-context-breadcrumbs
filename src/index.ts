@@ -96,15 +96,15 @@ function loadJsonIfPresent(filePath: string): unknown | undefined {
 export function loadConfig(cwd: string, notify?: NotifyFn): NestedContextConfig {
 	let merged: Record<string, unknown> = {};
 	const settingsPath = path.join(cwd, ".pi", "settings.json");
-	const extensionConfigPath = path.join(cwd, ".pi", "nested-context.json");
+	const extensionConfigPath = path.join(cwd, ".pi", "context-breadcrumbs.json");
 
 	try {
 		const settings = loadJsonIfPresent(settingsPath);
-		if (isPlainObject(settings) && isPlainObject(settings.nestedContext)) {
-			merged = { ...merged, ...settings.nestedContext };
+		if (isPlainObject(settings) && isPlainObject(settings["context-breadcrumbs"])) {
+			merged = { ...merged, ...settings["context-breadcrumbs"] };
 		}
 	} catch (error) {
-		notify?.(`Nested context: could not read .pi/settings.json (${String(error)})`, "warning");
+		notify?.(`Context breadcrumbs: could not read .pi/settings.json (${String(error)})`, "warning");
 	}
 
 	try {
@@ -113,7 +113,7 @@ export function loadConfig(cwd: string, notify?: NotifyFn): NestedContextConfig 
 			merged = { ...merged, ...extensionConfig };
 		}
 	} catch (error) {
-		notify?.(`Nested context: could not read .pi/nested-context.json (${String(error)})`, "warning");
+		notify?.(`Context breadcrumbs: could not read .pi/context-breadcrumbs.json (${String(error)})`, "warning");
 	}
 
 	return normalizeConfig(merged);
@@ -339,7 +339,7 @@ export class NestedContextManager {
 		if (entries.length === 0) return undefined;
 
 		const parts = [
-			"[Nested context files loaded by extension]",
+			"[Context breadcrumb files loaded by extension]",
 			"",
 			"The following instructions apply only to work under their listed directories.",
 			"Existing Pi startup context remains active.",
@@ -477,7 +477,7 @@ export class NestedContextManager {
 			const warningKey = `${absPath}:error:${String(error)}`;
 			if (!this.warned.has(warningKey)) {
 				this.warned.add(warningKey);
-				this.notify?.(`Nested context discovery skipped ${path.basename(absPath)} (${String(error)})`, "warning");
+				this.notify?.(`Context breadcrumbs discovery skipped ${path.basename(absPath)} (${String(error)})`, "warning");
 			}
 			return false;
 		}
@@ -498,14 +498,14 @@ function getBuiltinToolNames(pi: ExtensionAPI): Set<string> {
 }
 
 function formatList(entries: NestedContextListEntry[]): string[] {
-	if (entries.length === 0) return ["Nested context: no files loaded."];
+	if (entries.length === 0) return ["Context breadcrumbs: no files loaded."];
 	return [
-		`Nested context: ${entries.length} file(s) loaded`,
+		`Context breadcrumbs: ${entries.length} file(s) loaded`,
 		...entries.map((entry) => `- ${entry.path} (applies: ${entry.appliesTo}, ${entry.size} bytes, loaded: ${entry.lastLoadTime})`),
 	];
 }
 
-export default function nestedContextExtension(pi: ExtensionAPI) {
+export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 	let manager: NestedContextManager | undefined;
 	let builtinToolNames = new Set<string>();
 
@@ -539,7 +539,7 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 			const isBuiltin = builtinToolNames.has(event.toolName);
 			await manager.observeToolCall(event.toolName, event.input, isBuiltin);
 		} catch (error) {
-			safeNotify(ctx, `Nested context discovery failed; continuing tool call (${String(error)})`, "warning");
+			safeNotify(ctx, `Context breadcrumbs discovery failed; continuing tool call (${String(error)})`, "warning");
 		}
 	});
 
@@ -551,11 +551,11 @@ export default function nestedContextExtension(pi: ExtensionAPI) {
 			if (!content) return;
 
 			const messages = event.messages.filter(
-				(message) => !(message.role === "custom" && message.customType === "nested-context"),
+				(message) => !(message.role === "custom" && message.customType === "context-breadcrumbs"),
 			);
 			messages.push({
 				role: "custom",
-				customType: "nested-context",
+				customType: "context-breadcrumbs",
 				content,
 				display: false,
 				timestamp: 0,
