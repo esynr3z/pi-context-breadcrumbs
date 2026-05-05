@@ -116,6 +116,26 @@ Add `CLAUDE.md` or other filenames explicitly if desired:
 
 State is not persisted across Pi sessions.
 
+## Development
+
+Bootstrap a fresh checkout with Node 25+:
+
+```bash
+npm run bootstrap
+```
+
+Common development tasks are available as npm scripts and Makefile targets:
+
+```bash
+npm run lint
+npm run check
+npm test
+npm run build
+npm run ci
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer workflow, hooks, CI, and release process.
+
 ## Tests
 
 Run the lightweight automated tests with Node 25+:

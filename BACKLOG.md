@@ -1,10 +1,10 @@
 # Backlog
 
-- [ ] Создать GitHub CI с release-процедурой по push tag и pre-merge процедурой для PR или push в `master`/`main`.
-- [ ] Создать Makefile или принятый для TypeScript-проектов аналог с основными dev tasks: lint, test, typecheck/build и прочие проверки.
-- [ ] Засетапить pre-commit hooks и добавить туда проверки.
-- [ ] Добавить bootstrap-скрипт для подготовки репозитория на новой машине: установка зависимостей, настройка hooks и прочая инициализация.
-- [ ] Добавить `CONTRIBUTING.md` и описать developer workflow.
+- [x] Создать GitHub CI с release-процедурой по push tag и pre-merge процедурой для PR или push в `master`/`main`.
+- [x] Создать Makefile или принятый для TypeScript-проектов аналог с основными dev tasks: lint, test, typecheck/build и прочие проверки.
+- [x] Засетапить pre-commit hooks и добавить туда проверки.
+- [x] Добавить bootstrap-скрипт для подготовки репозитория на новой машине: установка зависимостей, настройка hooks и прочая инициализация.
+- [x] Добавить `CONTRIBUTING.md` и описать developer workflow.
 - [ ] Упростить проект отдельными задачами:
   - [ ] Оставить только `chain`-режим, убрать `nearest`.
   - [ ] По умолчанию добавить в `includeFilenames` `AGENTS.override.md` и `CLAUDE.md`.
