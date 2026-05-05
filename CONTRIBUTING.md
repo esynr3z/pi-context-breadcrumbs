@@ -38,6 +38,27 @@ pi -e ./src/index.ts
 
 If Pi is already running after a change, run `/reload` in Pi.
 
+## Demo fixture
+
+A runnable fixture lives in `demo-fixture/`.
+
+Manual verification:
+
+```bash
+cd demo-fixture
+pi -e ../src/index.ts
+```
+
+Then ask Pi to read or edit `packages/a/src/file.ts`. After the tool call, `/context-breadcrumbs` should list:
+
+```text
+packages/AGENTS.md
+packages/a/AGENTS.md
+packages/a/src/AGENTS.md
+```
+
+Ask Pi to access `packages/b/src/file.ts`; the package-b chain should be added without duplicating `packages/AGENTS.md`.
+
 ## Pre-commit hook
 
 The repository-managed pre-commit hook runs:

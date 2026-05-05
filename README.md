@@ -1,89 +1,26 @@
 # pi-context-breadcrumbs
 
-Loads path-scoped nested context files after Pi tools access files in subdirectories.
-
-Pi's built-in startup context is cwd-based: it loads global, ancestor, and current-directory `AGENTS.md` / `CLAUDE.md` files once at startup. This extension adds Claude-Code-like nested behavior without changing Pi core: when a filesystem tool call references a path below the session cwd, the extension discovers configured context files between cwd and that path and injects them into subsequent LLM calls.
+Path-scoped nested context loading for Pi coding agent. The extension watches filesystem tool calls, discovers context files between the session cwd and accessed paths, and injects them into later model calls.
 
 ## Install / enable
-
-Install as a Pi package after publishing:
 
 ```bash
 pi install npm:pi-context-breadcrumbs
 ```
 
-For local development from this repository:
+Configuration is loaded at session start and after `/reload`.
 
-```bash
-pi -e ./src/index.ts
-```
+## Commands
 
-If Pi is already open after changing the extension, run `/reload`.
+- `/context-breadcrumbs` — show loaded context files, their scope, size, and load time as a notification.
 
-## Trigger behavior
-
-The extension observes `tool_call` events and extracts typed path fields from filesystem tools:
-
-- `read`, `write`, `edit`
-- `ls` / `list`
-- `grep` / `search` / `find`
-- future built-in typed tools with clear path-like fields such as `path`, `paths`, `file`, `directory`, `dir`, `cwd`, or `root`
-
-For `bash` / shell commands, the extension intentionally does **not** parse command strings. This Pi version exposes `bash` as `{ command: string; timeout?: number }`, without robust typed path metadata, and shell parsing would be fragile.
-
-Discovery affects subsequent LLM calls. It does not retroactively affect the already-issued tool call that triggered discovery.
-
-## Path resolution and safety
-
-- Relative paths resolve against the Pi session cwd.
-- Existing directories are treated as directories; other paths are treated as files and use their parent directory.
-- The session cwd is the project boundary.
-- Paths outside cwd are skipped.
-- Symlinks are checked with `realpath`; symlinks escaping cwd are skipped.
-- Only configured filenames are read.
-- Context files are never executed.
-- Common generated/vendor/cache dirs are ignored by default.
-- If the session cwd is inside a Git repository, paths ignored by `.gitignore` are skipped too.
-- Discovery errors are caught and do not block the original tool call.
-
-## Discovery order and precedence
-
-For a path like:
-
-```text
-packages/foo/src/driver.ts
-```
-
-the extension searches upward from `packages/foo/src` toward cwd, excluding cwd itself, and injects matching files in broad-to-specific order:
-
-```text
-packages/AGENTS.md
-packages/foo/AGENTS.md
-packages/foo/src/AGENTS.md
-```
-
-Pi's startup context remains active. Nested context files are path-scoped; more specific nested files override broader/root instructions for matching paths when instructions conflict. This rule is stated explicitly in the injected context.
-
-## Injection
-
-Pi's extension API can alter the system prompt only at `before_agent_start`, before the first model call for a user prompt. Nested discovery happens later, from tool calls, so this extension uses the `context` hook to append one hidden synthetic custom message before each provider call.
-
-The injected message starts with:
-
-```text
-[Nested context files loaded by extension]
-```
-
-It is deterministic, deduplicated, ordered broad-to-specific, and rebuilt from the in-memory cache on every LLM context build. Modified files are reloaded from disk when `mtime` or size changes.
+State is in-memory only and is not persisted across Pi sessions.
 
 ## Configuration
 
-Configuration is read at session start / `/reload` from either:
+Configuration is read from `.pi/settings.json` under `nestedContext`, then overridden by `.pi/nested-context.json` when present.
 
-1. `.pi/settings.json` under the key `nestedContext`
-2. `.pi/nested-context.json` (overrides the settings key)
-
-Schema/defaults:
+Defaults:
 
 ```json
 {
@@ -94,67 +31,14 @@ Schema/defaults:
 }
 ```
 
-Override `includeFilenames` if the project uses a different context filename set:
+Use `includeFilenames` to replace the context filename set, and `ignoreDirs` to skip generated, vendor, or cache directories. If cwd is inside a Git repository, `.gitignore`-ignored paths are skipped too.
 
-```json
-{
-  "includeFilenames": ["AGENTS.md", "PROJECT_NOTES.md"]
-}
-```
+## Operation
 
-## Commands
+Trigger: the extension observes typed filesystem tool inputs from `read`, `write`, `edit`, `ls` / `list`, `grep` / `search` / `find`, and future typed tools with path-like fields. It intentionally does not parse `bash` commands.
 
-- `/context-breadcrumbs` — shows currently loaded nested context files, applies-to scope, byte size, and last load time as a notification. It does not leave a persistent widget below the editor.
+Path resolution: relative paths resolve from the Pi session cwd. The cwd is the project boundary. Paths outside cwd and symlinks escaping cwd are skipped. Context files are read as UTF-8 text and never executed.
 
-State is not persisted across Pi sessions.
+Discovery order: for `packages/foo/src/driver.ts`, cwd-level context is left to Pi startup context and nested files are loaded broad-to-specific, for example `packages/AGENTS.md`, `packages/foo/AGENTS.md`, then `packages/foo/src/AGENTS.md`. More specific files override broader instructions for matching paths.
 
-## Development
-
-Bootstrap a fresh checkout with Node 25+:
-
-```bash
-npm run bootstrap
-```
-
-Common development tasks are available as npm scripts and Makefile targets:
-
-```bash
-npm run lint
-npm run check
-npm test
-npm run build
-npm run ci
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full developer workflow, hooks, CI, and release process.
-
-## Tests
-
-Run the lightweight automated tests with Node 25+:
-
-```bash
-npm test
-```
-
-The tests cover chain discovery, deduplication, separate subtrees, default and custom filenames, `.gitignore` skips, outside-cwd skips, changed-file reloads, newly-created context files after observed writes, unsafe replacement invalidation, broad-to-specific order, large context files, and the bash parsing limitation.
-
-## Demo fixture
-
-A runnable fixture lives in `demo-fixture/`.
-
-Manual verification:
-
-```bash
-cd demo-fixture
-pi -e ../src/index.ts
-```
-
-Then ask Pi to read or edit `packages/a/src/file.ts`. After the tool call, `/context-breadcrumbs` should list:
-
-```text
-packages/AGENTS.md
-packages/a/AGENTS.md
-packages/a/src/AGENTS.md
-```
-
-Ask Pi to access `packages/b/src/file.ts`; the package-b chain should be added without duplicating `packages/AGENTS.md`.
+Injection: discovered files are appended as one hidden custom context message before provider calls. The message is deterministic, deduplicated, and refreshed when loaded files change on disk.
