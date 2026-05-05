@@ -1,6 +1,6 @@
 # Backlog
 
-- [x] Создать GitHub CI с release-процедурой по push tag и pre-merge процедурой для PR или push в `master`/`main`.
+- [x] Создать GitHub CI с release-процедурой по push tag и pre-merge процедурой для PR или push в основную ветку.
 - [x] Создать Makefile или принятый для TypeScript-проектов аналог с основными dev tasks: lint, test, typecheck/build и прочие проверки.
 - [x] Засетапить pre-commit hooks и добавить туда проверки.
 - [x] Добавить bootstrap-скрипт для подготовки репозитория на новой машине: установка зависимостей, настройка hooks и прочая инициализация.

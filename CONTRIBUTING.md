@@ -66,7 +66,7 @@ Common types are `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `c
 
 ## Pull requests and CI
 
-Open pull requests against `master` unless the default branch changes. GitHub CI runs on pull requests and on pushes to `main` or `master`. A PR is ready to merge when CI is green and `npm run ci` passes locally.
+Open pull requests against the repository default branch. GitHub CI runs on pull requests and on pushes to the default branch. A PR is ready to merge when CI is green and `npm run ci` passes locally.
 
 ## Release workflow
 
