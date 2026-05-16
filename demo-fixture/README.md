@@ -15,9 +15,11 @@ Suggested manual checks:
 2. Ask Pi to access `packages/a/src/file.ts` again without changing any breadcrumb file.
    - Expect no new breadcrumb message.
 3. Edit `packages/a/src/AGENTS.md`, then ask Pi to access `packages/a/src/file.ts` again.
-   - Expect a new visible breadcrumb message with reason `content-changed`.
+   - Expect a new visible breadcrumb message whose rendered reason line says breadcrumb content changed and supersedes earlier breadcrumb content.
+   - If you inspect the persisted custom message details, `details.reason` should be `content-changed`.
 4. Run `/compact`, then ask Pi to access `packages/a/src/file.ts` again.
-   - Expect a new visible breadcrumb message with reason `restated-after-compaction`.
+   - Expect a new visible breadcrumb message whose rendered reason line says it is being restated after compaction.
+   - If you inspect the persisted custom message details, `details.reason` should be `restated-after-compaction`.
 5. Ask Pi to access `packages/b/src/file.ts`.
    - Expect a visible breadcrumb message for the package-b chain.
 6. Run `/context-breadcrumbs`.

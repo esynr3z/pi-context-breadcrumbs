@@ -107,15 +107,75 @@ function parseEntryTimestamp(value) {
     }
     return 0;
 }
+function isNewerPosition(timestamp, order, previousTimestamp, previousOrder) {
+    return timestamp > previousTimestamp || (timestamp === previousTimestamp && order > previousOrder);
+}
+function maybeSetLatestRecord(latestByPath, path, hash, timestamp, order) {
+    const previous = latestByPath.get(path);
+    if (!previous || isNewerPosition(timestamp, order, previous.timestamp, previous.order)) {
+        latestByPath.set(path, { hash, timestamp, order });
+    }
+}
+function maybeSetCompactionTimestamp(state, timestamp, order) {
+    if (isNewerPosition(timestamp, order, state.latestCompactionTimestamp, state.latestCompactionOrder)) {
+        state.latestCompactionTimestamp = timestamp;
+        state.latestCompactionOrder = order;
+    }
+}
+export function createEmptyBreadcrumbBranchState() {
+    return {
+        latestByPath: new Map(),
+        latestCompactionTimestamp: 0,
+        latestCompactionOrder: -1,
+    };
+}
+export function recordBreadcrumbAnnouncement(files, timestamp, order = 0) {
+    const state = createEmptyBreadcrumbBranchState();
+    for (const file of files) {
+        maybeSetLatestRecord(state.latestByPath, file.path, file.contentHash, timestamp, order);
+    }
+    return state;
+}
+export function recordBreadcrumbCompaction(timestamp, order = 0) {
+    const state = createEmptyBreadcrumbBranchState();
+    maybeSetCompactionTimestamp(state, timestamp, order);
+    return state;
+}
+export function mergeBreadcrumbBranchStates(...states) {
+    const merged = createEmptyBreadcrumbBranchState();
+    const latestSourceByPath = new Map();
+    let latestCompactionSource = -1;
+    for (const [stateIndex, state] of states.entries()) {
+        if (state.latestCompactionTimestamp > merged.latestCompactionTimestamp ||
+            (state.latestCompactionTimestamp === merged.latestCompactionTimestamp &&
+                (stateIndex > latestCompactionSource ||
+                    (stateIndex === latestCompactionSource && state.latestCompactionOrder > merged.latestCompactionOrder)))) {
+            merged.latestCompactionTimestamp = state.latestCompactionTimestamp;
+            merged.latestCompactionOrder = state.latestCompactionOrder;
+            latestCompactionSource = stateIndex;
+        }
+        for (const [filePath, record] of state.latestByPath) {
+            const previous = merged.latestByPath.get(filePath);
+            const previousSource = latestSourceByPath.get(filePath) ?? -1;
+            if (!previous ||
+                record.timestamp > previous.timestamp ||
+                (record.timestamp === previous.timestamp &&
+                    (stateIndex > previousSource || (stateIndex === previousSource && record.order > previous.order)))) {
+                merged.latestByPath.set(filePath, record);
+                latestSourceByPath.set(filePath, stateIndex);
+            }
+        }
+    }
+    return merged;
+}
 export function collectBreadcrumbBranchState(entries) {
-    const latestByPath = new Map();
-    let latestCompactionTimestamp = 0;
-    for (const entry of entries) {
+    const state = createEmptyBreadcrumbBranchState();
+    for (const [index, entry] of entries.entries()) {
         if (!isPlainObject(entry))
             continue;
         const timestamp = parseEntryTimestamp(entry.timestamp);
         if (entry.type === "compaction") {
-            latestCompactionTimestamp = Math.max(latestCompactionTimestamp, timestamp);
+            maybeSetCompactionTimestamp(state, timestamp, index);
             continue;
         }
         if (entry.type !== "custom_message" || entry.customType !== "context-breadcrumbs")
@@ -124,13 +184,10 @@ export function collectBreadcrumbBranchState(entries) {
         if (!details)
             continue;
         for (const file of details.files) {
-            const previous = latestByPath.get(file.path);
-            if (!previous || timestamp >= previous.timestamp) {
-                latestByPath.set(file.path, { hash: file.contentHash, timestamp });
-            }
+            maybeSetLatestRecord(state.latestByPath, file.path, file.contentHash, timestamp, index);
         }
     }
-    return { latestByPath, latestCompactionTimestamp };
+    return state;
 }
 export function shouldAnnounceBreadcrumbChain(files, branchState) {
     if (files.length === 0)
@@ -164,25 +221,22 @@ function isBreadcrumbCustomMessage(message) {
 }
 export function filterSupersededBreadcrumbMessages(messages) {
     const latestByPath = new Map();
-    for (const message of messages) {
+    for (const [index, message] of messages.entries()) {
         if (!isBreadcrumbCustomMessage(message))
             continue;
         for (const file of message.details.files) {
-            const previous = latestByPath.get(file.path);
-            if (!previous || message.timestamp >= previous.timestamp) {
-                latestByPath.set(file.path, { hash: file.contentHash, timestamp: message.timestamp });
-            }
+            maybeSetLatestRecord(latestByPath, file.path, file.contentHash, message.timestamp, index);
         }
     }
     const filtered = [];
-    for (const message of messages) {
+    for (const [index, message] of messages.entries()) {
         if (!isBreadcrumbCustomMessage(message)) {
             filtered.push(message);
             continue;
         }
         const files = message.details.files.filter((file) => {
             const latest = latestByPath.get(file.path);
-            return latest?.hash === file.contentHash && latest.timestamp === message.timestamp;
+            return latest?.hash === file.contentHash && latest.timestamp === message.timestamp && latest.order === index;
         });
         if (files.length === 0)
             continue;

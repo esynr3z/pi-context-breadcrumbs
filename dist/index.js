@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
-import { buildBreadcrumbCustomMessage, collectBreadcrumbBranchState, filterSupersededBreadcrumbMessages, shouldAnnounceBreadcrumbChain, } from "./breadcrumb-messages.js";
+import { buildBreadcrumbCustomMessage, collectBreadcrumbBranchState, createEmptyBreadcrumbBranchState, filterSupersededBreadcrumbMessages, mergeBreadcrumbBranchStates, recordBreadcrumbAnnouncement, recordBreadcrumbCompaction, shouldAnnounceBreadcrumbChain, } from "./breadcrumb-messages.js";
 export const DEFAULT_CONFIG = {
     enabled: true,
     includeFilenames: ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"],
@@ -279,9 +279,13 @@ export class NestedContextManager {
     async observeToolCall(toolName, input, isBuiltinTool = true) {
         if (!this.config.enabled)
             return [];
-        const paths = extractFilesystemPaths(toolName, input, isBuiltinTool);
+        return this.observePaths(extractFilesystemPaths(toolName, input, isBuiltinTool));
+    }
+    async observePaths(rawPaths) {
+        if (!this.config.enabled)
+            return [];
         const byPath = new Map();
-        for (const rawPath of paths) {
+        for (const rawPath of rawPaths) {
             for (const file of await this.observePath(rawPath)) {
                 byPath.set(file.absPath, file);
             }
@@ -486,6 +490,9 @@ function formatList(entries) {
 export default function contextBreadcrumbsExtension(pi) {
     let manager;
     let builtinToolNames = new Set();
+    let currentTurnOverlay = createEmptyBreadcrumbBranchState();
+    let branchStateCache;
+    let overlayOrder = 0;
     const safeNotify = (ctx, message, level) => {
         try {
             ctx.ui?.notify?.(message, level);
@@ -494,15 +501,44 @@ export default function contextBreadcrumbsExtension(pi) {
             // Notification failure must never affect tool execution.
         }
     };
+    const resetEphemeralState = () => {
+        currentTurnOverlay = createEmptyBreadcrumbBranchState();
+        branchStateCache = undefined;
+        overlayOrder = 0;
+    };
+    const getBranchState = (entries) => {
+        const lastEntry = entries.at(-1);
+        const lastEntryId = typeof lastEntry?.id === "string" ? lastEntry.id : "";
+        if (branchStateCache && branchStateCache.branchLength === entries.length && branchStateCache.lastEntryId === lastEntryId) {
+            return branchStateCache.state;
+        }
+        const state = collectBreadcrumbBranchState(entries);
+        branchStateCache = { branchLength: entries.length, lastEntryId, state };
+        return state;
+    };
     pi.on("session_start", async (_event, ctx) => {
         const config = loadConfig(ctx.cwd, (message, level) => safeNotify(ctx, message, level));
         manager = new NestedContextManager(ctx.cwd, config, (message, level) => safeNotify(ctx, message, level));
         builtinToolNames = getBuiltinToolNames(pi);
+        resetEphemeralState();
     });
     pi.on("session_shutdown", async () => {
         manager?.clear();
         manager = undefined;
         builtinToolNames = new Set();
+        resetEphemeralState();
+    });
+    pi.on("turn_start", async () => {
+        currentTurnOverlay = createEmptyBreadcrumbBranchState();
+        overlayOrder = 0;
+    });
+    pi.on("turn_end", async () => {
+        currentTurnOverlay = createEmptyBreadcrumbBranchState();
+        overlayOrder = 0;
+    });
+    pi.on("session_compact", async () => {
+        currentTurnOverlay = mergeBreadcrumbBranchStates(currentTurnOverlay, recordBreadcrumbCompaction(Date.now(), ++overlayOrder));
+        branchStateCache = undefined;
     });
     pi.on("before_agent_start", async (event) => {
         manager?.setStartupContextFiles(event.systemPromptOptions.contextFiles);
@@ -511,17 +547,19 @@ export default function contextBreadcrumbsExtension(pi) {
         try {
             if (!manager?.config.enabled)
                 return;
+            const activeManager = manager;
             const isBuiltin = builtinToolNames.has(event.toolName);
             const rawPaths = extractFilesystemPaths(event.toolName, event.input, isBuiltin);
-            const files = await manager.observeToolCall(event.toolName, event.input, isBuiltin);
+            const files = await activeManager.observePaths(rawPaths);
             if (files.length === 0)
                 return;
             const observedTargets = rawPaths
-                .map((rawPath) => manager?.normalizeObservedTarget(rawPath))
+                .map((rawPath) => activeManager.normalizeObservedTarget(rawPath))
                 .filter((target) => typeof target === "string");
             if (observedTargets.length === 0)
                 return;
-            const branchState = collectBreadcrumbBranchState(ctx.sessionManager.getBranch());
+            const branchEntries = ctx.sessionManager.getBranch();
+            const branchState = mergeBreadcrumbBranchStates(getBranchState(branchEntries), currentTurnOverlay);
             const injectedFiles = files.map((file) => ({
                 path: file.relPath.replace(/\\/g, "/"),
                 appliesTo: file.appliesTo,
@@ -532,6 +570,7 @@ export default function contextBreadcrumbsExtension(pi) {
             if (!decision.announce || !decision.reason)
                 return;
             const message = buildBreadcrumbCustomMessage(observedTargets, injectedFiles, decision.reason);
+            currentTurnOverlay = mergeBreadcrumbBranchStates(currentTurnOverlay, recordBreadcrumbAnnouncement(injectedFiles, Date.now(), ++overlayOrder));
             pi.sendMessage({
                 customType: "context-breadcrumbs",
                 content: message.content,

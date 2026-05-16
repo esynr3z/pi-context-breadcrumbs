@@ -6,7 +6,11 @@ import path from "node:path";
 import {
   buildBreadcrumbCustomMessage,
   collectBreadcrumbBranchState,
+  createEmptyBreadcrumbBranchState,
   filterSupersededBreadcrumbMessages,
+  mergeBreadcrumbBranchStates,
+  recordBreadcrumbAnnouncement,
+  recordBreadcrumbCompaction,
   shouldAnnounceBreadcrumbChain,
 } from "../src/breadcrumb-messages.ts";
 import { NestedContextManager, normalizeConfig, extractFilesystemPaths, loadConfig } from "../src/index.ts";
@@ -225,6 +229,7 @@ try {
     makeBranchMessage(initialMessage.details, "2026-05-15T00:00:00.000Z"),
     makeBranchMessage(changedMessage.details, "2026-05-15T00:03:00.000Z"),
   ]);
+  assert.equal(reconstruction.latestByPath.get("packages/a/src/AGENTS.md")?.order, 1, "newer equal-path records keep later entry order");
   assert.equal(
     reconstruction.latestByPath.get("packages/a/src/AGENTS.md")?.hash,
     changedMessage.details.files.find((file) => file.path === "packages/a/src/AGENTS.md")?.contentHash,
@@ -260,6 +265,37 @@ try {
   assert.equal(filteredMessages.length, 3, "provider-bound list keeps unrelated messages and rewritten breadcrumb messages");
   assert.deepEqual(filesInContent(filteredMessages[0].content), ["packages/a/AGENTS.md"]);
   assert.deepEqual(filesInContent(filteredMessages[1].content), ["packages/AGENTS.md", "packages/b/AGENTS.md"]);
+
+  const sameTimestampOld = buildBreadcrumbCustomMessage(["packages/a/src/file.ts"], [requireFile(changedMessage.details.files, "packages/AGENTS.md")], "new-chain");
+  const sameTimestampNew = buildBreadcrumbCustomMessage(
+    ["packages/a/src/file.ts"],
+    [{ ...requireFile(changedMessage.details.files, "packages/AGENTS.md"), contentHash: "later-hash", content: "later" }],
+    "content-changed",
+  );
+  const sameTimestampFiltered = filterSupersededBreadcrumbMessages([
+    makePromptMessage(sameTimestampOld.details, 500, sameTimestampOld.content),
+    makePromptMessage(sameTimestampNew.details, 500, sameTimestampNew.content),
+  ]);
+  assert.equal(sameTimestampFiltered.length, 1, "same-timestamp supersession prefers the later message in prompt order");
+  assert.equal(sameTimestampFiltered[0].details.files[0].contentHash, "later-hash");
+
+  const overlayState = mergeBreadcrumbBranchStates(
+    createEmptyBreadcrumbBranchState(),
+    repeatedState,
+    recordBreadcrumbAnnouncement(toInjected(changedChainA), 2_000_000_000_000, 1),
+    recordBreadcrumbCompaction(500, 0),
+  );
+  assert.deepEqual(shouldAnnounceBreadcrumbChain(toInjected(changedChainA), overlayState), { announce: false }, "in-memory overlay suppresses same-turn duplicate announcements");
+
+  const equalTimestampOverlay = mergeBreadcrumbBranchStates(
+    collectBreadcrumbBranchState([makeBranchMessage(initialMessage.details, "2026-05-15T00:00:00.000Z")]),
+    recordBreadcrumbAnnouncement(toInjected(changedChainA), Date.parse("2026-05-15T00:00:00.000Z"), 1),
+  );
+  assert.deepEqual(
+    shouldAnnounceBreadcrumbChain(toInjected(changedChainA), equalTimestampOverlay),
+    { announce: false },
+    "equal-timestamp overlay records still override older branch state",
+  );
 
   assert.deepEqual(extractFilesystemPaths("bash", { command: "cat packages/a/src/file.ts" }), []);
   assert.deepEqual(extractFilesystemPaths("read", { path: "packages/a/src/file.ts" }), ["packages/a/src/file.ts"]);

@@ -16,6 +16,10 @@
       "default": [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"]
     },
     "notifyOnLoad": { "type": "boolean", "default": true },
-    "filterSupersededFromPrompt": { "type": "boolean", "default": true }
+    "filterSupersededFromPrompt": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, older superseded breadcrumb messages are filtered from the provider-bound prompt while visible session history remains unchanged."
+    }
   }
 }

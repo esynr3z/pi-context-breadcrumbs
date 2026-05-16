@@ -57,9 +57,11 @@ Then drive these scenarios:
 2. Ask Pi to access `packages/a/src/file.ts` again without changing any breadcrumb file.
    - Expect no new breadcrumb message.
 3. Edit `packages/a/src/AGENTS.md`, then ask Pi to access `packages/a/src/file.ts` again.
-   - Expect a new visible breadcrumb message whose reason says the breadcrumb content changed and that it supersedes earlier breadcrumb content.
+   - Expect a new visible breadcrumb message whose rendered reason line says breadcrumb content changed and that it supersedes earlier breadcrumb content.
+   - If you inspect the persisted custom message details, `details.reason` should be `content-changed`.
 4. Run `/compact`, then ask Pi to access `packages/a/src/file.ts` again.
-   - Expect a new visible breadcrumb message whose reason says it is being restated after compaction.
+   - Expect a new visible breadcrumb message whose rendered reason line says it is being restated after compaction.
+   - If you inspect the persisted custom message details, `details.reason` should be `restated-after-compaction`.
 5. Run `/context-breadcrumbs`.
    - Expect a notification listing the currently loaded in-memory breadcrumb files for the active process.
 

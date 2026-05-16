@@ -16,9 +16,16 @@ export interface BreadcrumbMessageDetails {
 	files: BreadcrumbInjectedFile[];
 }
 
+export interface BreadcrumbLatestRecord {
+	hash: string;
+	timestamp: number;
+	order: number;
+}
+
 export interface BreadcrumbBranchState {
-	latestByPath: Map<string, { hash: string; timestamp: number }>;
+	latestByPath: Map<string, BreadcrumbLatestRecord>;
 	latestCompactionTimestamp: number;
+	latestCompactionOrder: number;
 }
 
 type BreadcrumbCustomMessage = AgentMessage & {
@@ -142,16 +149,100 @@ function parseEntryTimestamp(value: unknown): number {
 	return 0;
 }
 
-export function collectBreadcrumbBranchState(entries: unknown[]): BreadcrumbBranchState {
-	const latestByPath = new Map<string, { hash: string; timestamp: number }>();
-	let latestCompactionTimestamp = 0;
+function isNewerPosition(timestamp: number, order: number, previousTimestamp: number, previousOrder: number): boolean {
+	return timestamp > previousTimestamp || (timestamp === previousTimestamp && order > previousOrder);
+}
 
-	for (const entry of entries) {
+function maybeSetLatestRecord(
+	latestByPath: Map<string, BreadcrumbLatestRecord>,
+	path: string,
+	hash: string,
+	timestamp: number,
+	order: number,
+): void {
+	const previous = latestByPath.get(path);
+	if (!previous || isNewerPosition(timestamp, order, previous.timestamp, previous.order)) {
+		latestByPath.set(path, { hash, timestamp, order });
+	}
+}
+
+function maybeSetCompactionTimestamp(state: BreadcrumbBranchState, timestamp: number, order: number): void {
+	if (isNewerPosition(timestamp, order, state.latestCompactionTimestamp, state.latestCompactionOrder)) {
+		state.latestCompactionTimestamp = timestamp;
+		state.latestCompactionOrder = order;
+	}
+}
+
+export function createEmptyBreadcrumbBranchState(): BreadcrumbBranchState {
+	return {
+		latestByPath: new Map(),
+		latestCompactionTimestamp: 0,
+		latestCompactionOrder: -1,
+	};
+}
+
+export function recordBreadcrumbAnnouncement(
+	files: BreadcrumbInjectedFile[],
+	timestamp: number,
+	order = 0,
+): BreadcrumbBranchState {
+	const state = createEmptyBreadcrumbBranchState();
+	for (const file of files) {
+		maybeSetLatestRecord(state.latestByPath, file.path, file.contentHash, timestamp, order);
+	}
+	return state;
+}
+
+export function recordBreadcrumbCompaction(timestamp: number, order = 0): BreadcrumbBranchState {
+	const state = createEmptyBreadcrumbBranchState();
+	maybeSetCompactionTimestamp(state, timestamp, order);
+	return state;
+}
+
+export function mergeBreadcrumbBranchStates(...states: BreadcrumbBranchState[]): BreadcrumbBranchState {
+	const merged = createEmptyBreadcrumbBranchState();
+	const latestSourceByPath = new Map<string, number>();
+	let latestCompactionSource = -1;
+
+	for (const [stateIndex, state] of states.entries()) {
+		if (
+			state.latestCompactionTimestamp > merged.latestCompactionTimestamp ||
+			(state.latestCompactionTimestamp === merged.latestCompactionTimestamp &&
+				(stateIndex > latestCompactionSource ||
+					(stateIndex === latestCompactionSource && state.latestCompactionOrder > merged.latestCompactionOrder)))
+		) {
+			merged.latestCompactionTimestamp = state.latestCompactionTimestamp;
+			merged.latestCompactionOrder = state.latestCompactionOrder;
+			latestCompactionSource = stateIndex;
+		}
+
+		for (const [filePath, record] of state.latestByPath) {
+			const previous = merged.latestByPath.get(filePath);
+			const previousSource = latestSourceByPath.get(filePath) ?? -1;
+			if (
+				!previous ||
+				record.timestamp > previous.timestamp ||
+				(record.timestamp === previous.timestamp &&
+					(stateIndex > previousSource || (stateIndex === previousSource && record.order > previous.order)))
+			) {
+				merged.latestByPath.set(filePath, record);
+				latestSourceByPath.set(filePath, stateIndex);
+			}
+		}
+	}
+
+	return merged;
+}
+
+export function collectBreadcrumbBranchState(entries: unknown[]): BreadcrumbBranchState {
+	const state = createEmptyBreadcrumbBranchState();
+
+	for (const [index, entry] of entries.entries()) {
 		if (!isPlainObject(entry)) continue;
 		const timestamp = parseEntryTimestamp(entry.timestamp);
 
 		if (entry.type === "compaction") {
-			latestCompactionTimestamp = Math.max(latestCompactionTimestamp, timestamp);
+			maybeSetCompactionTimestamp(state, timestamp, index);
 			continue;
 		}
 
@@ -159,14 +250,11 @@ export function collectBreadcrumbBranchState(entries: unknown[]): BreadcrumbBran
 		const details = parseBreadcrumbMessageDetails(entry.details);
 		if (!details) continue;
 		for (const file of details.files) {
-			const previous = latestByPath.get(file.path);
-			if (!previous || timestamp >= previous.timestamp) {
-				latestByPath.set(file.path, { hash: file.contentHash, timestamp });
-			}
+			maybeSetLatestRecord(state.latestByPath, file.path, file.contentHash, timestamp, index);
 		}
 	}
 
-	return { latestByPath, latestCompactionTimestamp };
+	return state;
 }
 
 export function shouldAnnounceBreadcrumbChain(
@@ -201,20 +289,17 @@ function isBreadcrumbCustomMessage(message: AgentMessage): message is Breadcrumb
 }
 
 export function filterSupersededBreadcrumbMessages(messages: AgentMessage[]): AgentMessage[] {
-	const latestByPath = new Map<string, { hash: string; timestamp: number }>();
+	const latestByPath = new Map<string, BreadcrumbLatestRecord>();
 
-	for (const message of messages) {
+	for (const [index, message] of messages.entries()) {
 		if (!isBreadcrumbCustomMessage(message)) continue;
 		for (const file of message.details.files) {
-			const previous = latestByPath.get(file.path);
-			if (!previous || message.timestamp >= previous.timestamp) {
-				latestByPath.set(file.path, { hash: file.contentHash, timestamp: message.timestamp });
-			}
+			maybeSetLatestRecord(latestByPath, file.path, file.contentHash, message.timestamp, index);
 		}
 	}
 
 	const filtered: AgentMessage[] = [];
-	for (const message of messages) {
+	for (const [index, message] of messages.entries()) {
 		if (!isBreadcrumbCustomMessage(message)) {
 			filtered.push(message);
 			continue;
@@ -222,7 +307,7 @@ export function filterSupersededBreadcrumbMessages(messages: AgentMessage[]): Ag
 
 		const files = message.details.files.filter((file) => {
 			const latest = latestByPath.get(file.path);
-			return latest?.hash === file.contentHash && latest.timestamp === message.timestamp;
+			return latest?.hash === file.contentHash && latest.timestamp === message.timestamp && latest.order === index;
 		});
 		if (files.length === 0) continue;
 		if (files.length === message.details.files.length) {

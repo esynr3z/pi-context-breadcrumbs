@@ -31,6 +31,7 @@ This change does not delete or rewrite old session history. Old breadcrumb messa
 - [x] (2026-05-16 13:25Z) Added prompt-time filtering of superseded breadcrumb messages behind `filterSupersededFromPrompt: true`.
 - [x] (2026-05-16 13:45Z) Rewrote `test/context-breadcrumbs.test.mjs`, updated `README.md`, `config.schema.json`, `CONTRIBUTING.md`, and `demo-fixture/README.md`, and documented the visible persistent behavior.
 - [x] (2026-05-16 15:16Z) Ran `npm run lint`, `npm run check`, `npm test`, and `npm run build`. Manually verified first-announcement, no-duplicate-on-repeat, content-change re-announcement, and compaction restatement behavior in `demo-fixture/` by inspecting the persisted session transcript.
+- [x] (2026-05-16 16:05Z) Ran parallel post-implementation review lanes plus a final control pass. Fixed same-turn duplicate-announcement suppression by adding a turn-local overlay merged with reconstructed branch state, fixed equal-timestamp recency tie handling with stable later-state precedence, aligned docs with rendered reason text, documented the schema flag more clearly, and extended tests for tie and overlay cases.
 
 ## Surprises & Discoveries
 
@@ -51,6 +52,12 @@ This change does not delete or rewrite old session history. Old breadcrumb messa
 
 - Observation: print mode does not execute `/compact` as a slash command; it sends the text to the model. For transcript-level validation without an interactive TUI, a synthetic `compaction` entry appended to the session file was sufficient to prove the restatement logic on the next path access.
   Evidence: `pi -p --session <session> "/compact"` produced a normal assistant reply instead of a `compaction` entry, while appending one `compaction` JSONL line caused the subsequent access to emit a `reason: "restated-after-compaction"` breadcrumb message.
+
+- Observation: reconstructing branch state from persisted session history is not enough to suppress duplicate breadcrumb announcements within a single turn, because `pi.sendMessage(..., { deliverAs: "steer" })` can be logically decided before the new `custom_message` entry is visible to the next `tool_call` hook in that same turn.
+  Evidence: independent review found that the pre-fix implementation checked only `collectBreadcrumbBranchState(ctx.sessionManager.getBranch())`, which would re-see stale branch state on a second same-turn filesystem tool call in the same subtree.
+
+- Observation: equal-timestamp recency ties need explicit deterministic precedence across two domains: persisted branch-entry scan order and turn-local overlay order. Reusing the raw numeric counters as one shared ordering domain is unsound.
+  Evidence: independent review pointed out that a branch index like `57` would beat an overlay-local order like `1` on equal timestamps even when the overlay represented the newer state.
 
 ## Decision Log
 
@@ -86,9 +93,17 @@ This change does not delete or rewrite old session history. Old breadcrumb messa
   Rationale: the early delivery validation showed that `deliverAs: "steer"` already persists the visible breadcrumb message before the next assistant response in the demo fixture, including short “read and stop” turns, so the fallback would add dead complexity for no demonstrated benefit.
   Date/Author: 2026-05-16 / Grin
 
+- Decision: suppress same-turn duplicate announcements with a turn-local overlay merged with reconstructed branch state, rather than trying to force synchronous session materialization.
+  Rationale: the branch transcript remains the persistent source of truth across reload and resume, but same-turn dedupe needs an in-memory overlay because the just-sent visible message is not guaranteed to be visible in `ctx.sessionManager.getBranch()` before the next `tool_call` hook in the same turn.
+  Date/Author: 2026-05-16 / Grin
+
+- Decision: when merging reconstructed branch state with turn-local overlay state, equal timestamps must prefer later merged states, not compare unrelated numeric counters from different ordering domains.
+  Rationale: branch-entry indexes and overlay-local counters are each meaningful only within their own source stream. A later-state-precedence merge rule avoids cross-domain nonsense on equal timestamps.
+  Date/Author: 2026-05-16 / Grin
+
 ## Outcomes & Retrospective
 
-Completed. The package now emits visible persistent `context-breadcrumbs` custom messages from the `tool_call` hook instead of hidden prompt injections, stores the full breadcrumb chain and reason in structured `details`, reconstructs latest announced hashes from the current session branch after reload or resume, restates exact breadcrumb text after later path access when a compaction postdates the last announcement, and optionally filters superseded breadcrumb messages out of the provider-bound prompt while leaving transcript history untouched.
+Completed. The package now emits visible persistent `context-breadcrumbs` custom messages from the `tool_call` hook instead of hidden prompt injections, stores the full breadcrumb chain and reason in structured `details`, reconstructs latest announced hashes from the current session branch after reload or resume, suppresses same-turn duplicate announcements with a turn-local overlay merged over reconstructed branch state, restates exact breadcrumb text after later path access when a compaction postdates the last announcement, and optionally filters superseded breadcrumb messages out of the provider-bound prompt while leaving transcript history untouched.
 
 The biggest nuisance was not the extension logic but the validation harness: non-interactive print mode happily treats `/compact` as user text instead of executing the slash command. That was annoying in the usual way. The actual compaction-sensitive logic was still validated end to end by appending a real `compaction` entry to the session transcript and proving that the next relevant path access emitted a `restated-after-compaction` breadcrumb message.
 

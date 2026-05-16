@@ -12,18 +12,25 @@ export interface BreadcrumbMessageDetails {
     reason: BreadcrumbAnnouncementReason;
     files: BreadcrumbInjectedFile[];
 }
+export interface BreadcrumbLatestRecord {
+    hash: string;
+    timestamp: number;
+    order: number;
+}
 export interface BreadcrumbBranchState {
-    latestByPath: Map<string, {
-        hash: string;
-        timestamp: number;
-    }>;
+    latestByPath: Map<string, BreadcrumbLatestRecord>;
     latestCompactionTimestamp: number;
+    latestCompactionOrder: number;
 }
 export declare function parseBreadcrumbMessageDetails(value: unknown): BreadcrumbMessageDetails | undefined;
 export declare function buildBreadcrumbCustomMessage(observedTargets: string[], files: BreadcrumbInjectedFile[], reason: BreadcrumbAnnouncementReason): {
     content: string;
     details: BreadcrumbMessageDetails;
 };
+export declare function createEmptyBreadcrumbBranchState(): BreadcrumbBranchState;
+export declare function recordBreadcrumbAnnouncement(files: BreadcrumbInjectedFile[], timestamp: number, order?: number): BreadcrumbBranchState;
+export declare function recordBreadcrumbCompaction(timestamp: number, order?: number): BreadcrumbBranchState;
+export declare function mergeBreadcrumbBranchStates(...states: BreadcrumbBranchState[]): BreadcrumbBranchState;
 export declare function collectBreadcrumbBranchState(entries: unknown[]): BreadcrumbBranchState;
 export declare function shouldAnnounceBreadcrumbChain(files: BreadcrumbInjectedFile[], branchState: BreadcrumbBranchState): {
     announce: boolean;

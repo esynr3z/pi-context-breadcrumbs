@@ -87,6 +87,7 @@ export declare class NestedContextManager {
     listLoaded(): NestedContextListEntry[];
     orderedLoaded(): LoadedContextFile[];
     observeToolCall(toolName: string, input: unknown, isBuiltinTool?: boolean): Promise<LoadedContextFile[]>;
+    observePaths(rawPaths: string[]): Promise<LoadedContextFile[]>;
     observePath(rawPath: string): Promise<LoadedContextFile[]>;
     normalizeObservedTarget(rawPath: string): string | undefined;
     refreshLoaded(): void;
