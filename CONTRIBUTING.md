@@ -49,15 +49,29 @@ cd demo-fixture
 pi -e ../src/index.ts
 ```
 
-Then ask Pi to read or edit `packages/a/src/file.ts`. After the tool call, `/context-breadcrumbs` should list:
+Then drive these scenarios:
 
-```text
-packages/AGENTS.md
-packages/a/AGENTS.md
-packages/a/src/AGENTS.md
+1. Ask Pi to read or edit `packages/a/src/file.ts`.
+   - Expect a visible `context-breadcrumbs` custom message in the transcript.
+   - It should name `packages/a/src/file.ts` and include the chain `packages/AGENTS.md`, `packages/a/AGENTS.md`, and `packages/a/src/AGENTS.md` in broad-to-specific order.
+2. Ask Pi to access `packages/a/src/file.ts` again without changing any breadcrumb file.
+   - Expect no new breadcrumb message.
+3. Edit `packages/a/src/AGENTS.md`, then ask Pi to access `packages/a/src/file.ts` again.
+   - Expect a new visible breadcrumb message whose reason says the breadcrumb content changed and that it supersedes earlier breadcrumb content.
+4. Run `/compact`, then ask Pi to access `packages/a/src/file.ts` again.
+   - Expect a new visible breadcrumb message whose reason says it is being restated after compaction.
+5. Run `/context-breadcrumbs`.
+   - Expect a notification listing the currently loaded in-memory breadcrumb files for the active process.
+
+You can also set `.pi/context-breadcrumbs.json` in the fixture to:
+
+```json
+{
+  "filterSupersededFromPrompt": false
+}
 ```
 
-Ask Pi to access `packages/b/src/file.ts`; the package-b chain should be added without duplicating `packages/AGENTS.md`.
+Reload Pi and confirm the extension still emits visible breadcrumb messages. This flag changes provider-bound prompt filtering only; it does not remove visible history.
 
 ## Pre-commit hook
 

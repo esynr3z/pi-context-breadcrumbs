@@ -1,7 +1,14 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+	buildBreadcrumbCustomMessage,
+	collectBreadcrumbBranchState,
+	filterSupersededBreadcrumbMessages,
+	shouldAnnounceBreadcrumbChain,
+} from "./breadcrumb-messages.ts";
 
 export type NotifyLevel = "info" | "warning" | "error";
 
@@ -10,6 +17,7 @@ export interface NestedContextConfig {
 	includeFilenames: string[];
 	ignoreDirs: string[];
 	notifyOnLoad: boolean;
+	filterSupersededFromPrompt: boolean;
 }
 
 export const DEFAULT_CONFIG: NestedContextConfig = {
@@ -17,6 +25,7 @@ export const DEFAULT_CONFIG: NestedContextConfig = {
 	includeFilenames: ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"],
 	ignoreDirs: [".git", "node_modules", "dist", "build", "target", ".venv", "venv", "__pycache__"],
 	notifyOnLoad: true,
+	filterSupersededFromPrompt: true,
 };
 
 export const CONFIG_SCHEMA = {
@@ -35,16 +44,21 @@ export const CONFIG_SCHEMA = {
 			default: DEFAULT_CONFIG.ignoreDirs,
 		},
 		notifyOnLoad: { type: "boolean", default: DEFAULT_CONFIG.notifyOnLoad },
+		filterSupersededFromPrompt: {
+			type: "boolean",
+			default: DEFAULT_CONFIG.filterSupersededFromPrompt,
+		},
 	},
 } as const;
 
-interface LoadedContextFile {
+export interface LoadedContextFile {
 	absPath: string;
 	relPath: string;
 	dirAbs: string;
 	dirRel: string;
 	appliesTo: string;
 	content: string;
+	contentHash: string;
 	size: number;
 	mtimeMs: number;
 	lastLoadTime: number;
@@ -85,6 +99,10 @@ export function normalizeConfig(raw: unknown): NestedContextConfig {
 		includeFilenames: uniqueStrings(input.includeFilenames, DEFAULT_CONFIG.includeFilenames),
 		ignoreDirs: uniqueStrings(input.ignoreDirs, DEFAULT_CONFIG.ignoreDirs),
 		notifyOnLoad: typeof input.notifyOnLoad === "boolean" ? input.notifyOnLoad : DEFAULT_CONFIG.notifyOnLoad,
+		filterSupersededFromPrompt:
+			typeof input.filterSupersededFromPrompt === "boolean"
+				? input.filterSupersededFromPrompt
+				: DEFAULT_CONFIG.filterSupersededFromPrompt,
 	};
 }
 
@@ -160,9 +178,6 @@ function collectPathValues(value: unknown, parentKey: string | undefined, out: s
 export function extractFilesystemPaths(toolName: string, input: unknown, isBuiltinTool = true): string[] {
 	if (toolName === "bash" || toolName === "shell") return [];
 
-	// Current Pi built-ins with typed path fields. The generic collector below also
-	// handles future built-ins named list/search or custom typed tools with clear
-	// path-like field names.
 	const fsToolNames = new Set(["read", "write", "edit", "ls", "list", "grep", "search", "find"]);
 	if (!isBuiltinTool && !fsToolNames.has(toolName)) return [];
 
@@ -170,8 +185,6 @@ export function extractFilesystemPaths(toolName: string, input: unknown, isBuilt
 	collectPathValues(input, undefined, out);
 
 	if ((toolName === "ls" || toolName === "list" || toolName === "grep" || toolName === "search" || toolName === "find") && out.length === 0) {
-		// These tools default to cwd when path is omitted. Observing cwd does not load
-		// nested context because cwd-level startup context is intentionally excluded.
 		out.push(".");
 	}
 
@@ -250,12 +263,10 @@ function fileSortKey(entry: LoadedContextFile): string {
 	return `${String(depth).padStart(6, "0")}\u0000${entry.dirRel}\u0000${String(entry.includeIndex).padStart(6, "0")}\u0000${entry.relPath}`;
 }
 
-// NestedContextManager is the source of truth for discovery behavior. It keeps
-// state in memory only: observed target directories, loaded context files, and
-// warnings already shown to the user. On each provider-context build,
-// refreshLoaded() re-stats loaded files and re-checks previously observed
-// directories, so edits or newly-created context files affect the next model
-// call without requiring another filesystem access.
+function hashContent(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
+}
+
 export class NestedContextManager {
 	readonly cwdAbs: string;
 	readonly cwdReal: string;
@@ -315,23 +326,40 @@ export class NestedContextManager {
 		}));
 	}
 
-	// Observe typed tool inputs before filesystem tools execute. Shell command
-	// strings are intentionally ignored by extractFilesystemPaths() because Pi's
-	// bash tool does not expose reliable typed path metadata.
-	async observeToolCall(toolName: string, input: unknown, isBuiltinTool = true): Promise<void> {
-		if (!this.config.enabled) return;
-		const paths = extractFilesystemPaths(toolName, input, isBuiltinTool);
-		for (const rawPath of paths) {
-			await this.observePath(rawPath);
-		}
+	orderedLoaded(): LoadedContextFile[] {
+		return [...this.loaded.values()].sort((a, b) => fileSortKey(a).localeCompare(fileSortKey(b)));
 	}
 
-	async observePath(rawPath: string): Promise<void> {
-		if (!this.config.enabled) return;
+	async observeToolCall(toolName: string, input: unknown, isBuiltinTool = true): Promise<LoadedContextFile[]> {
+		if (!this.config.enabled) return [];
+		const paths = extractFilesystemPaths(toolName, input, isBuiltinTool);
+		const byPath = new Map<string, LoadedContextFile>();
+		for (const rawPath of paths) {
+			for (const file of await this.observePath(rawPath)) {
+				byPath.set(file.absPath, file);
+			}
+		}
+		return [...byPath.values()].sort((a, b) => fileSortKey(a).localeCompare(fileSortKey(b)));
+	}
+
+	async observePath(rawPath: string): Promise<LoadedContextFile[]> {
+		if (!this.config.enabled) return [];
 		const dir = this.resolveTargetDirectory(rawPath);
-		if (!dir) return;
+		if (!dir) return [];
 		this.observedDirs.add(dir);
 		this.discoverForDirectory(dir);
+		return this.filesForDirectory(dir);
+	}
+
+	normalizeObservedTarget(rawPath: string): string | undefined {
+		const dir = this.resolveTargetDirectory(rawPath);
+		if (!dir) return undefined;
+		const cleaned = stripAtPrefix(rawPath);
+		if (!cleaned) return undefined;
+		const resolved = path.normalize(path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(this.cwdAbs, cleaned));
+		if (!isUnderPath(resolved, this.cwdAbs)) return undefined;
+		const relPath = path.relative(this.cwdAbs, resolved).replace(/\\/g, "/");
+		return relPath || ".";
 	}
 
 	refreshLoaded(): void {
@@ -343,35 +371,22 @@ export class NestedContextManager {
 		}
 	}
 
-	buildContextMessage(): string | undefined {
-		const entries = this.orderedLoaded();
-		if (entries.length === 0) return undefined;
-
-		const parts = [
-			"[Context breadcrumb files loaded by extension]",
-			"",
-			"The following instructions apply only to work under their listed directories.",
-			"Existing Pi startup context remains active.",
-			"More specific nested context files override broader/root instructions for matching paths.",
-		];
-
-		for (const entry of entries) {
-			parts.push("", `File: ${entry.relPath.replace(/\\/g, "/")}`, `Applies to: ${entry.appliesTo}`, "Content:", entry.content);
+	private filesForDirectory(targetDir: string): LoadedContextFile[] {
+		const files: LoadedContextFile[] = [];
+		for (const dir of this.dirsBroadToSpecific(targetDir).filter((candidate) => !this.isIgnoredPath(candidate))) {
+			for (let index = 0; index < this.config.includeFilenames.length; index++) {
+				const candidate = path.normalize(path.join(dir, this.config.includeFilenames[index]!));
+				const loaded = this.loaded.get(candidate);
+				if (loaded) files.push(loaded);
+			}
 		}
-
-		return parts.join("\n");
-	}
-
-	private orderedLoaded(): LoadedContextFile[] {
-		return [...this.loaded.values()].sort((a, b) => fileSortKey(a).localeCompare(fileSortKey(b)));
+		return files;
 	}
 
 	private resolveTargetDirectory(rawPath: string): string | undefined {
 		const cleaned = stripAtPrefix(rawPath);
 		if (!cleaned) return undefined;
 
-		// The Pi session cwd is the project boundary. Check both lexical paths and
-		// realpaths so symlinks cannot smuggle context discovery outside cwd.
 		const resolved = path.normalize(path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(this.cwdAbs, cleaned));
 		if (!isUnderPath(resolved, this.cwdAbs)) return undefined;
 
@@ -397,7 +412,6 @@ export class NestedContextManager {
 
 		const dir = targetExists && targetIsDirectory ? resolved : path.dirname(resolved);
 		if (!isUnderPath(dir, this.cwdAbs)) return undefined;
-
 		if (this.isIgnoredPath(dir)) return undefined;
 
 		const existingAncestor = nearestExistingAncestor(dir, this.cwdAbs);
@@ -408,9 +422,6 @@ export class NestedContextManager {
 		return path.normalize(dir);
 	}
 
-	// Cwd-level files are excluded because Pi startup context already handles cwd
-	// and ancestors. Nested files are injected broad-to-specific so deeper files
-	// can override broader instructions for their scoped paths.
 	private dirsBroadToSpecific(targetDir: string): string[] {
 		const dirs: string[] = [];
 		let current = path.normalize(targetDir);
@@ -477,6 +488,7 @@ export class NestedContextManager {
 				dirRel,
 				appliesTo: formatAppliesTo(dirRel),
 				content,
+				contentHash: hashContent(content),
 				size: st.size,
 				mtimeMs: st.mtimeMs,
 				lastLoadTime: Date.now(),
@@ -543,8 +555,6 @@ export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 		builtinToolNames = new Set();
 	});
 
-	// Capture Pi's startup context files before the first model call so this
-	// extension does not duplicate them in the injected breadcrumb message.
 	pi.on("before_agent_start", async (event) => {
 		manager?.setStartupContextFiles(event.systemPromptOptions.contextFiles);
 	});
@@ -553,33 +563,44 @@ export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 		try {
 			if (!manager?.config.enabled) return;
 			const isBuiltin = builtinToolNames.has(event.toolName);
-			await manager.observeToolCall(event.toolName, event.input, isBuiltin);
+			const rawPaths = extractFilesystemPaths(event.toolName, event.input, isBuiltin);
+			const files = await manager.observeToolCall(event.toolName, event.input, isBuiltin);
+			if (files.length === 0) return;
+
+			const observedTargets = rawPaths
+				.map((rawPath) => manager?.normalizeObservedTarget(rawPath))
+				.filter((target): target is string => typeof target === "string");
+			if (observedTargets.length === 0) return;
+
+			const branchState = collectBreadcrumbBranchState(ctx.sessionManager.getBranch());
+			const injectedFiles = files.map((file) => ({
+				path: file.relPath.replace(/\\/g, "/"),
+				appliesTo: file.appliesTo,
+				contentHash: file.contentHash,
+				content: file.content,
+			}));
+			const decision = shouldAnnounceBreadcrumbChain(injectedFiles, branchState);
+			if (!decision.announce || !decision.reason) return;
+
+			const message = buildBreadcrumbCustomMessage(observedTargets, injectedFiles, decision.reason);
+			pi.sendMessage(
+				{
+					customType: "context-breadcrumbs",
+					content: message.content,
+					details: message.details,
+					display: true,
+				},
+				{ deliverAs: "steer" },
+			);
 		} catch (error) {
 			safeNotify(ctx, `Context breadcrumbs discovery failed; continuing tool call (${String(error)})`, "warning");
 		}
 	});
 
-	// Discovery happens after tool calls, so provider context injection is used
-	// instead of mutating the startup system prompt. One hidden custom message is
-	// rebuilt for each provider call and deduplicated by customType.
 	pi.on("context", async (event) => {
 		try {
-			if (!manager?.config.enabled) return;
-			manager.refreshLoaded();
-			const content = manager.buildContextMessage();
-			if (!content) return;
-
-			const messages = event.messages.filter(
-				(message) => !(message.role === "custom" && message.customType === "context-breadcrumbs"),
-			);
-			messages.push({
-				role: "custom",
-				customType: "context-breadcrumbs",
-				content,
-				display: false,
-				timestamp: 0,
-			});
-			return { messages };
+			if (!manager?.config.enabled || !manager.config.filterSupersededFromPrompt) return;
+			return { messages: filterSupersededBreadcrumbMessages(event.messages) };
 		} catch {
 			return;
 		}
@@ -588,6 +609,7 @@ export default function contextBreadcrumbsExtension(pi: ExtensionAPI) {
 	pi.registerCommand("context-breadcrumbs", {
 		description: "List currently loaded context breadcrumb files",
 		handler: async (_args, ctx) => {
+			manager?.refreshLoaded();
 			const lines = formatList(manager?.listLoaded() ?? []);
 			safeNotify(ctx, lines.join("\n"), "info");
 		},

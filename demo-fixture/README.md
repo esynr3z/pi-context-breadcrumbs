@@ -7,27 +7,30 @@ cd /path/to/pi-context-breadcrumbs/demo-fixture
 pi -e ../src/index.ts
 ```
 
-Try prompts that make Pi access:
+Suggested manual checks:
 
-- `packages/a/src/file.ts`
-- `packages/b/src/file.ts`
+1. Ask Pi to access `packages/a/src/file.ts`.
+   - Expect a visible `context-breadcrumbs` custom message that names `packages/a/src/file.ts`.
+   - It should include `packages/AGENTS.md`, `packages/a/AGENTS.md`, and `packages/a/src/AGENTS.md` in broad-to-specific order.
+2. Ask Pi to access `packages/a/src/file.ts` again without changing any breadcrumb file.
+   - Expect no new breadcrumb message.
+3. Edit `packages/a/src/AGENTS.md`, then ask Pi to access `packages/a/src/file.ts` again.
+   - Expect a new visible breadcrumb message with reason `content-changed`.
+4. Run `/compact`, then ask Pi to access `packages/a/src/file.ts` again.
+   - Expect a new visible breadcrumb message with reason `restated-after-compaction`.
+5. Ask Pi to access `packages/b/src/file.ts`.
+   - Expect a visible breadcrumb message for the package-b chain.
+6. Run `/context-breadcrumbs`.
+   - Expect a notification listing the currently loaded in-memory breadcrumb files.
 
-Expected after accessing `packages/a/src/file.ts`:
+Optional config check:
 
-```text
-packages/AGENTS.md
-packages/a/AGENTS.md
-packages/a/src/AGENTS.md
+Create `.pi/context-breadcrumbs.json` in this fixture with:
+
+```json
+{
+  "filterSupersededFromPrompt": false
+}
 ```
 
-Expected after accessing `packages/b/src/file.ts` in a fresh session:
-
-```text
-packages/AGENTS.md
-packages/b/AGENTS.md
-packages/b/src/AGENTS.md
-```
-
-If you first accessed `packages/a/src/file.ts`, then access `packages/b/src/file.ts` in the same session, `/context-breadcrumbs` lists all loaded files. The package-b access adds `packages/b/AGENTS.md` and `packages/b/src/AGENTS.md`; `packages/AGENTS.md` is not duplicated.
-
-Use `/context-breadcrumbs` to list loaded files.
+Reload Pi. The extension should still emit visible breadcrumb messages; the flag only disables prompt-time filtering of superseded breadcrumb messages.
