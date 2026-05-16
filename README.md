@@ -2,6 +2,16 @@
 
 Path-scoped nested context loading for Pi coding agent. The extension watches filesystem tool calls, discovers breadcrumb files between the session cwd and accessed paths, and announces them as visible persistent custom messages in the transcript.
 
+## Why this exists
+
+Here a "breadcrumb file" means an `AGENTS.md`-style local context file — usually `AGENTS.md` itself, with optional variants such as `AGENTS.override.md` or `CLAUDE.md` if configured.
+
+One giant root `AGENTS.md` used as a universal handbook tends to rot into a bloated reference dump that the agent only partially uses. Better practice is closer to [harness engineering](https://openai.com/index/harness-engineering/): keep the large documentation elsewhere, and use small local `AGENTS.md` files as path-scoped maps that say what this part of the repo is, what is nearby, and how to work there.
+
+Pi already loads `AGENTS.md` from the current directory and its parents at session start. That is useful, but it does not automatically load narrower nested breadcrumbs when the agent later wanders into deeper parts of the tree. This package fills that gap. As file access moves through the repo, it loads the relevant smaller breadcrumb signposts for those paths so the agent stays oriented: where it is, what surrounds it, and how to interact with that area.
+
+In short: this package treats breadcrumb files as a network of local pointers, not as a single monolithic instruction book.
+
 ## Install / enable
 
 ```bash
